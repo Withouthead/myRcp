@@ -1,19 +1,19 @@
 package mykcp
 
 type KCPSEG struct {
-	Conv uint32
-	Cmd uint32
-	Frg uint32
-	Wnd uint32
-	Ts uint32
-	Sn uint32
-	Una uint32
-	Len uint32
+	Conv     uint32
+	Cmd      uint8
+	Frg      uint8
+	Wnd      uint16
+	Ts       uint32
+	Sn       uint32
+	Una      uint32
+	Len      uint32
 	Resendts uint32
-	Rto uint32
-	Fastack uint32
-	Xmit uint32
-	Data []byte
+	Rto      uint32
+	Fastack  uint32
+	Xmit     uint32
+	Data     []byte
 }
 
 func newKcpSeg(size int) KCPSEG {
@@ -25,13 +25,13 @@ func newKcpSeg(size int) KCPSEG {
 type SegQueueNode struct {
 	Next *SegQueueNode
 	Prev *SegQueueNode
-	Seg	 *KCPSEG
+	Seg  *KCPSEG
 }
 
 type SegQueue struct {
-	head *SegQueueNode
-	tail *SegQueueNode
-	len  int
+	head        *SegQueueNode
+	tail        *SegQueueNode
+	len         int
 	snToNodeMap map[uint32]*SegQueueNode
 }
 
@@ -52,7 +52,7 @@ func (q *SegQueue) Push(seg *KCPSEG) {
 	newNode.Prev = q.tail
 	q.tail.Next = newNode
 	q.tail = newNode
-	q.len ++
+	q.len++
 }
 
 func (q *SegQueue) Pop() {
@@ -60,10 +60,10 @@ func (q *SegQueue) Pop() {
 		return
 	}
 	q.tail = q.tail.Prev
-	q.len --
+	q.len--
 }
 
-func (q *SegQueue) Size() int{
+func (q *SegQueue) Size() int {
 	return q.len
 }
 
@@ -73,7 +73,7 @@ func (q *SegQueue) ParseAck(sn uint32) {
 		return
 	}
 	node.Prev.Next = node.Next
-	q.len --
+	q.len--
 }
 
 func (q *SegQueue) ParseUna(sn uint32) {
@@ -84,7 +84,7 @@ func (q *SegQueue) ParseUna(sn uint32) {
 	for p != nil {
 		if p.Seg.Una <= sn {
 			p.Prev.Next = p.Next
-			q.len --
+			q.len--
 		} else {
 			break
 		}
