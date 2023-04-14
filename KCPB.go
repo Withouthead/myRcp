@@ -1,6 +1,12 @@
 package mykcp
 
-const IKCP_OVERHEAD = 24
+const (
+	IKCP_OVERHEAD = 24
+	IKCP_PROBE_INIT = 7000
+	IKCP_PROBE_LIMIT = 120000
+	IKCP_SEND_WIND_FLAG = 1
+	IKCP_SEND_WASK_FLAG = 2
+)
 
 const (
 	IKCP_CMD_PUSH = iota
@@ -25,6 +31,8 @@ type KCPB struct {
 	stream       int
 	sndQueue     *SegQueue
 	rcvQueue     *SegQueue
+	sndBuf		 *SegQueue
+	rcvBuf 	     *SegQueue
 	WindRcvLen   uint32
 	buffer       []byte
 	OverHeadSize uint32
@@ -32,7 +40,11 @@ type KCPB struct {
 	sndNext      uint32
 	rcvNext      uint32
 	rcvWind      uint16
+	mtu			 uint32
 	ackList      []AckNode
+	sendBitFlag uint32
+	probeWait	uint32
+	tsWait		uint32
 }
 
 func (kcp *KCPB) Send(buffer []byte) int {
@@ -91,7 +103,7 @@ func (kcp *KCPB) Send(buffer []byte) int {
 	}
 	return 0
 }
-
+ 
 func (kcp *KCPB) Update(current uint32) {
 	kcp.current = current
 	if kcp.updated == 0 {
@@ -115,23 +127,84 @@ func (kcp *KCPB) Update(current uint32) {
 }
 
 func (kcp *KCPB) ShrinkBuf() {
-	if kcp.rcvQueue.Size() == 0 {
+	if kcp.rcvBuf.Size() == 0 {
 		kcp.sndUna = kcp.sndNext
 		return
 	}
-	kcp.sndUna = kcp.rcvQueue.Front().Seg.Una
+	kcp.sndUna = kcp.rcvBuf.Front().Seg.Una
+}
+
+
+func (kcp *KCPB) getUnusedWindSize() uint16 {
+	if kcp.rcvQueue.Size() > int(kcp.rcvWind) {
+		return 0
+	}
+	return kcp.rcvWind - uint16(kcp.rcvBuf.Size())
+}
+
+func (kcp *KCPB) output(data []byte) {
+	// TODO: code it later
 }
 
 func (kcp *KCPB) Flush() {
 	if kcp.updated == 0 {
 		return
 	}
-
+	
 	current := kcp.current
-	buffer := kcp.buffer
+	buffer := make([]byte, kcp.mtu)
 	var seg KCPSEG
 	seg.Conv = kcp.conv
-	// seg.Cmd =
+	seg.Cmd = IKCP_CMD_ACK
+	seg.Wnd = kcp.getUnusedWindSize()
+
+	
+	for i := 0; i < len(kcp.ackList); i++ {
+		if len(buffer) + IKCP_OVERHEAD > int(kcp.mtu) {
+			kcp.output(buffer)
+			buffer = make([]byte, kcp.mtu)
+		}
+		seg.Sn = kcp.ackList[i].Sn
+		seg.Ts = kcp.ackList[i].Ts
+		buffer = append(buffer, seg.Encode()...)
+	}
+	kcp.ackList = nil
+	
+	if kcp.rmtWnd == 0 {
+		if kcp.probeWait == 0 {
+			kcp.probeWait = IKCP_PROBE_INIT
+			kcp.tsWait = kcp.current + kcp.probeWait
+			
+		} else if kcp.tsWait > kcp.current {
+			kcp.probeWait += kcp.probeWait / 2
+			if kcp.probeWait > IKCP_PROBE_LIMIT {
+				kcp.probeWait = IKCP_PROBE_LIMIT
+			}
+			kcp.tsWait = kcp.current + kcp.probeWait
+			kcp.sendBitFlag |= IKCP_SEND_WASK_FLAG
+		}
+		
+	} else {
+		kcp.probeWait = 0
+		kcp.tsWait = 0
+	}
+	if kcp.sendBitFlag & IKCP_SEND_WASK_FLAG > 0{
+		seg.Cmd = IKCP_CMD_WASK
+		
+	}
+
+}
+
+func (kcp *KCPB) updateRcvQueue() {
+	for kcp.rcvBuf.Size() != 0 {
+		if kcp.rcvBuf.Back().Seg.Sn == kcp.rcvNext && kcp.rcvQueue.Size() <= int(kcp.rcvWind) {
+			seg := kcp.rcvBuf.Back()
+			kcp.rcvQueue.Push(seg.Seg)
+			kcp.rcvBuf.Pop()
+		} else {
+			break
+		}
+	}
 }
 
 func (kcp *KCPB) Input(data []byte) int {
@@ -160,35 +233,40 @@ func (kcp *KCPB) Input(data []byte) int {
 			return -3
 		}
 		kcp.rmtWnd = seg.Wnd
-		kcp.rcvQueue.ParseUna(seg.Una)
+		kcp.sndBuf.ParseUna(seg.Una)
 		kcp.ShrinkBuf() // TODO: check it if can be put back
 
-		if seg.Cmd == IKCP_CMD_ACK {
+		if seg.Cmd == IKCP_CMD_ACK { // TODO: finish rto
 			if flag == 0 {
 				flag = 1
 				maxAck = seg.Una
 			} else if maxAck < seg.Una {
 				maxAck = seg.Una
 			}
-			kcp.rcvQueue.ParseAck(seg.Una)
+			kcp.sndBuf.ParseAck(seg.Una)
 			kcp.ShrinkBuf()
 		} else if seg.Cmd == IKCP_CMD_PUSH {
-			if kcp.rcvNext+uint32(kcp.rmtWnd) > seg.Una {
+			if kcp.rcvNext+uint32(kcp.rcvWind) > seg.Una {
 				kcp.ackList = append(kcp.ackList, AckNode{seg.Sn, seg.Ts})
-
+				seg.Data = make([]byte, seg.Len)
+				copy(seg.Data, data)
+				kcp.rcvBuf.PushSegment(&seg)
+				kcp.updateRcvQueue()
 			}
+		} else if seg.Cmd == IKCP_CMD_WASK {
+			kcp.sendBitFlag |= IKCP_SEND_WIND_FLAG
+		} else if seg.Cmd == IKCP_CMD_WINS {
+			// have been processed before
+		} else {
+			return -3
 		}
+		data = data[seg.Len:]
 
 	}
-
+	
+	if flag != 0 {
+		kcp.sndBuf.ParseFastAck(maxAck)
+	}
+	//todo: finish cwnd
+	return 0
 }
-
-// func (kcp *KCPB) ikcp_input(data []byte) int {
-// 	size := len(data)
-// 	if(size == 0) {
-// 		return -1
-// 	}
-// 	while(1) {
-
-// 	}
-// }

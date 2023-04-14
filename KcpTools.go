@@ -12,7 +12,22 @@ func ikcp_decode16u(p []byte, l *uint16) []byte {
 	return p[2:]
 }
 
-func ikcp_decode8u(p []byte, c *byte) []byte {
+func ikcp_decode8u(p []byte, c *uint8) []byte {
 	*c = p[0]
+	return p[1:]
+}
+
+func ikcp_encode32u(p []byte, l uint32) []byte{
+	binary.LittleEndian.PutUint32(p, l)
+	return p[4:]
+}
+
+func ikcp_encode16u(p []byte, l uint16) []byte{
+	binary.LittleEndian.PutUint16(p, l)
+	return p[2:]
+}
+
+func ikcp_encode8u(p []byte, l uint8) []byte {
+	p[0] = l
 	return p[1:]
 }

@@ -22,6 +22,17 @@ func newKcpSeg(size int) KCPSEG {
 	return kcpSeg
 }
 
+func (seg *KCPSEG) Encode() []byte{
+	data := make([]byte, 24)
+	data = ikcp_encode32u(data, seg.Conv)
+	data = ikcp_encode8u(data, seg.Cmd)
+	data = ikcp_encode8u(data, seg.Frg)
+	data = ikcp_encode32u(data, seg.Ts)
+	data = ikcp_encode32u(data, seg.Sn)
+	data = ikcp_encode32u(data, seg.Len)
+	return data
+}
+
 type SegQueueNode struct {
 	Next *SegQueueNode
 	Prev *SegQueueNode
@@ -108,4 +119,22 @@ func (q *SegQueue) ParseFastAck(sn uint32) {
 		}
 		p = p.Next
 	}
+}
+
+func (q *SegQueue) PushSegment(seg *KCPSEG) {
+	_, ok := q.snToNodeMap[seg.Sn]
+	if ok {
+		return
+	}
+	p := q.head.Next
+	for p.Next != nil && p.Next.Seg.Sn < seg.Sn{
+		p = p.Next
+	}
+	segNode := &SegQueueNode{Seg: seg}
+	segNode.Next = p.Next
+	if p.Next != nil {
+		p.Next.Prev = segNode
+	}
+	segNode.Prev = p
+	p.Next = segNode
 }
