@@ -43,6 +43,9 @@ func NewSegQueue() *SegQueue {
 	return q
 }
 
+func (q *SegQueue) Front() *SegQueueNode {
+	return q.head.Next
+}
 func (q *SegQueue) Back() *SegQueueNode {
 	return q.tail
 }
@@ -88,5 +91,21 @@ func (q *SegQueue) ParseUna(sn uint32) {
 		} else {
 			break
 		}
+		p = p.Next
+	}
+}
+
+func (q *SegQueue) ParseFastAck(sn uint32) {
+	if q.len == 0 {
+		return
+	}
+	p := q.head.Next
+	for p != nil {
+		if p.Seg.Una < sn {
+			p.Seg.Fastack++
+		} else {
+			break
+		}
+		p = p.Next
 	}
 }

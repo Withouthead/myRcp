@@ -9,21 +9,30 @@ const (
 	IKCP_CMD_WINS
 )
 
+type AckNode struct {
+	Sn uint32
+	Ts uint32
+}
 type KCPB struct {
 	una          uint32
 	mss          uint32
 	current      uint32
 	updated      uint32
 	sndUna       uint32
-	ts_flush     uint32
+	tsFlush      uint32
 	interval     uint32
 	conv         uint32
 	stream       int
 	sndQueue     *SegQueue
-	rcv_queue    *SegQueue
+	rcvQueue     *SegQueue
 	WindRcvLen   uint32
 	buffer       []byte
-	OverHeadSize uint
+	OverHeadSize uint32
+	rmtWnd       uint16
+	sndNext      uint32
+	rcvNext      uint32
+	rcvWind      uint16
+	ackList      []AckNode
 }
 
 func (kcp *KCPB) Send(buffer []byte) int {
@@ -87,22 +96,30 @@ func (kcp *KCPB) Update(current uint32) {
 	kcp.current = current
 	if kcp.updated == 0 {
 		kcp.updated = 1
-		kcp.ts_flush = kcp.current
+		kcp.tsFlush = kcp.current
 	}
 
-	slap := int(kcp.current) - int(kcp.ts_flush)
+	slap := int(kcp.current) - int(kcp.tsFlush)
 	if slap >= 10000 || slap < -10000 {
-		kcp.ts_flush = kcp.current
+		kcp.tsFlush = kcp.current
 		slap = 0
 	}
 
 	if slap >= 0 {
-		kcp.ts_flush += kcp.interval
-		if kcp.current >= kcp.ts_flush {
-			kcp.ts_flush = kcp.current + kcp.interval
+		kcp.tsFlush += kcp.interval
+		if kcp.current >= kcp.tsFlush {
+			kcp.tsFlush = kcp.current + kcp.interval
 		}
 		kcp.Flush()
 	}
+}
+
+func (kcp *KCPB) ShrinkBuf() {
+	if kcp.rcvQueue.Size() == 0 {
+		kcp.sndUna = kcp.sndNext
+		return
+	}
+	kcp.sndUna = kcp.rcvQueue.Front().Seg.Una
 }
 
 func (kcp *KCPB) Flush() {
@@ -120,7 +137,7 @@ func (kcp *KCPB) Flush() {
 func (kcp *KCPB) Input(data []byte) int {
 	prev_una := kcp.sndUna
 	var maxAck uint32
-	var lastestTs uint32
+	//var lastestTs uint32
 	flag := 0
 	for {
 		var seg KCPSEG
@@ -138,6 +155,28 @@ func (kcp *KCPB) Input(data []byte) int {
 
 		if len(data) < int(seg.Len) {
 			return -2
+		}
+		if seg.Cmd != IKCP_CMD_ACK && seg.Cmd != IKCP_CMD_WINS && seg.Cmd != IKCP_CMD_WASK && seg.Cmd != IKCP_CMD_PUSH {
+			return -3
+		}
+		kcp.rmtWnd = seg.Wnd
+		kcp.rcvQueue.ParseUna(seg.Una)
+		kcp.ShrinkBuf() // TODO: check it if can be put back
+
+		if seg.Cmd == IKCP_CMD_ACK {
+			if flag == 0 {
+				flag = 1
+				maxAck = seg.Una
+			} else if maxAck < seg.Una {
+				maxAck = seg.Una
+			}
+			kcp.rcvQueue.ParseAck(seg.Una)
+			kcp.ShrinkBuf()
+		} else if seg.Cmd == IKCP_CMD_PUSH {
+			if kcp.rcvNext+uint32(kcp.rmtWnd) > seg.Una {
+				kcp.ackList = append(kcp.ackList, AckNode{seg.Sn, seg.Ts})
+
+			}
 		}
 
 	}
