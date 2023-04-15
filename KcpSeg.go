@@ -69,11 +69,21 @@ func (q *SegQueue) Push(seg *KCPSEG) {
 	q.len++
 }
 
-func (q *SegQueue) Pop() {
+func (q *SegQueue) PopFront() {
+	if q.len == 0 {
+		return
+	}
+	q.head.Next = q.head.Next.Next
+	q.head.Next.Prev = q.head
+	q.len --
+
+}
+func (q *SegQueue) PopBack() {
 	if q.len == 0 {
 		return
 	}
 	q.tail = q.tail.Prev
+	q.tail.Next = nil
 	q.len--
 }
 

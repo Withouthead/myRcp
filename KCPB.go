@@ -6,6 +6,7 @@ const (
 	IKCP_PROBE_LIMIT = 120000
 	IKCP_SEND_WIND_FLAG = 1
 	IKCP_SEND_WASK_FLAG = 2
+	IKCP_THRESH_MIN = 2
 )
 
 const (
@@ -40,11 +41,21 @@ type KCPB struct {
 	sndNext      uint32
 	rcvNext      uint32
 	rcvWind      uint16
+	sndWind      uint16
 	mtu			 uint32
 	ackList      []AckNode
 	sendBitFlag uint32
 	probeWait	uint32
 	tsWait		uint32
+	noCwnd	    bool
+	cwnd		uint16
+	RxRot		uint32
+	fastAckThreshould      uint32
+	fastXmitLimit	uint32
+	state 			int
+	deadLinkXmitLimit	uint32
+	sshthresh uint32
+	incr 	  uint16
 }
 
 func (kcp *KCPB) Send(buffer []byte) int {
@@ -147,6 +158,9 @@ func (kcp *KCPB) output(data []byte) {
 }
 
 func (kcp *KCPB) Flush() {
+
+	lost := false
+	change := 0
 	if kcp.updated == 0 {
 		return
 	}
@@ -158,12 +172,14 @@ func (kcp *KCPB) Flush() {
 	seg.Cmd = IKCP_CMD_ACK
 	seg.Wnd = kcp.getUnusedWindSize()
 
-	
-	for i := 0; i < len(kcp.ackList); i++ {
+	flushBufferFun := func (buffer []byte) {
 		if len(buffer) + IKCP_OVERHEAD > int(kcp.mtu) {
 			kcp.output(buffer)
 			buffer = make([]byte, kcp.mtu)
 		}
+	}	
+	for i := 0; i < len(kcp.ackList); i++ {
+		flushBufferFun(buffer)
 		seg.Sn = kcp.ackList[i].Sn
 		seg.Ts = kcp.ackList[i].Ts
 		buffer = append(buffer, seg.Encode()...)
@@ -188,11 +204,116 @@ func (kcp *KCPB) Flush() {
 		kcp.probeWait = 0
 		kcp.tsWait = 0
 	}
+
 	if kcp.sendBitFlag & IKCP_SEND_WASK_FLAG > 0{
 		seg.Cmd = IKCP_CMD_WASK
-		
+		flushBufferFun(buffer)
+		buffer = append(buffer, seg.Encode()...)
 	}
 
+	if kcp.sendBitFlag & IKCP_SEND_WIND_FLAG > 0 {
+		seg.Cmd = IKCP_CMD_WINS
+		flushBufferFun(buffer)
+		buffer = append(buffer, seg.Encode()...)
+	}
+
+	kcp.sendBitFlag = 0
+	cwnd := kcp.sndWind
+	if cwnd > kcp.rmtWnd {
+		cwnd = kcp.rmtWnd
+	}
+	if kcp.noCwnd { // TODO: check it
+		cwnd = kcp.cwnd
+	}
+	for kcp.sndNext <= kcp.sndUna + uint32(cwnd) {
+		if kcp.sndQueue.Size() == 0 {
+			break
+		}
+		seg := kcp.sndQueue.Front().Seg
+		kcp.sndQueue.PopFront()
+		seg.Conv = kcp.conv
+		seg.Cmd = IKCP_CMD_PUSH
+		seg.Ts = current
+		seg.Sn = kcp.sndNext
+		kcp.sndNext++
+		seg.Una = kcp.rcvNext
+		seg.Resendts = current
+		seg.Rto = kcp.RxRot
+		seg.Fastack = 0
+		seg.Xmit = 0
+		kcp.rcvQueue.Push(seg)
+	}
+
+	// TODO: delete rotmin
+   for p := kcp.sndBuf.Front(); p != nil; p = p.Next {
+		seg := p.Seg
+		needSend := 0
+		if seg.Xmit == 0 {
+			needSend = 1
+			seg.Xmit = 1
+			seg.Rto = kcp.RxRot
+			seg.Resendts = current + seg.Rto
+		} else if current > seg.Resendts {
+			needSend = 1
+			seg.Xmit++
+			seg.Rto += kcp.RxRot / 2 // change origin kcp caculate way to add 0.5 rxrto directly
+			seg.Resendts = current + seg.Rto
+			lost = true
+		} else if seg.Fastack >= kcp.fastAckThreshould {
+			if(seg.Xmit <= kcp.fastXmitLimit || kcp.fastXmitLimit == 0) {
+				needSend = 1
+				seg.Xmit ++
+				seg.Fastack = 0
+				seg.Resendts = current + seg.Rto
+				change ++
+			}
+		}
+		if needSend > 0 {
+			seg.Ts = current
+			seg.Wnd = kcp.getUnusedWindSize()
+			seg.Una = kcp.rcvNext
+			flushBufferFun(buffer)
+			buffer = append(buffer, seg.Encode()...)
+			if seg.Len > 0 {
+				buffer = append(buffer, seg.Data...)
+			}
+			if seg.Xmit >= kcp.deadLinkXmitLimit {
+				kcp.state = -1
+
+			}
+		}
+		
+   }
+   if len(buffer) > 0 {
+		kcp.output(buffer)
+		buffer = nil
+	}
+
+	if change > 0 { // 快速重传
+		inflight := kcp.sndNext - kcp.sndUna
+		kcp.sshthresh = inflight / 2
+		if kcp.sshthresh < IKCP_THRESH_MIN {
+			kcp.sshthresh = IKCP_THRESH_MIN
+		}
+		kcp.cwnd = uint16(kcp.sshthresh) + uint16(kcp.fastXmitLimit)
+		kcp.incr = kcp.cwnd * uint16(kcp.mss)
+
+	}
+
+	if lost {
+		kcp.sshthresh = uint32(cwnd) / 2
+		if kcp.sshthresh < IKCP_THRESH_MIN {
+			kcp.sshthresh = IKCP_THRESH_MIN
+		}
+		kcp.cwnd = 1
+		kcp.incr = uint16(kcp.mss)
+	}
+
+	if kcp.cwnd < 1 {
+		kcp.cwnd = 1
+		kcp.incr = uint16(kcp.mss)
+	}
+	
 }
 
 func (kcp *KCPB) updateRcvQueue() {
@@ -200,7 +321,7 @@ func (kcp *KCPB) updateRcvQueue() {
 		if kcp.rcvBuf.Back().Seg.Sn == kcp.rcvNext && kcp.rcvQueue.Size() <= int(kcp.rcvWind) {
 			seg := kcp.rcvBuf.Back()
 			kcp.rcvQueue.Push(seg.Seg)
-			kcp.rcvBuf.Pop()
+			kcp.rcvBuf.PopBack()
 		} else {
 			break
 		}
