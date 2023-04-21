@@ -1,12 +1,21 @@
-package mykcp
+package main
 
 const (
-	IKCP_OVERHEAD = 24
-	IKCP_PROBE_INIT = 7000
-	IKCP_PROBE_LIMIT = 120000
+	IKCP_OVERHEAD       = 24
+	IKCP_PROBE_INIT     = 7000
+	IKCP_PROBE_LIMIT    = 120000
 	IKCP_SEND_WIND_FLAG = 1
 	IKCP_SEND_WASK_FLAG = 2
-	IKCP_THRESH_MIN = 2
+	IKCP_THRESH_MIN     = 2
+	IKCP_RTO_MAX        = 60000
+	IKCP_WND_SND        = 32
+	IKCP_WND_RCV        = 128
+	IKCP_MTE_DEF        = 1400
+	IKCP_RTO_DEF        = 200
+	IKCP_RTO_MIN        = 100
+	IKCP_INTERVAL       = 100
+	IKCP_SSHTHRESH_INIT = 2
+	IKCP_FASTACK_LIMIT  = 5
 )
 
 const (
@@ -20,42 +29,65 @@ type AckNode struct {
 	Sn uint32
 	Ts uint32
 }
+
 type KCPB struct {
-	una          uint32
-	mss          uint32
-	current      uint32
-	updated      uint32
-	sndUna       uint32
-	tsFlush      uint32
-	interval     uint32
-	conv         uint32
-	stream       int
-	sndQueue     *SegQueue
-	rcvQueue     *SegQueue
-	sndBuf		 *SegQueue
-	rcvBuf 	     *SegQueue
-	WindRcvLen   uint32
-	buffer       []byte
-	OverHeadSize uint32
-	rmtWnd       uint16
-	sndNext      uint32
-	rcvNext      uint32
-	rcvWind      uint16
-	sndWind      uint16
-	mtu			 uint32
-	ackList      []AckNode
-	sendBitFlag uint32
-	probeWait	uint32
-	tsWait		uint32
-	noCwnd	    bool
-	cwnd		uint16
-	RxRot		uint32
-	fastAckThreshould      uint32
-	fastXmitLimit	uint32
-	state 			int
-	deadLinkXmitLimit	uint32
-	sshthresh uint32
-	incr 	  uint16
+	mss               uint32
+	current           uint32
+	updated           uint32
+	sndUna            uint32
+	tsFlush           uint32
+	interval          uint32
+	conv              uint32
+	stream            int
+	sndQueue          *SegQueue
+	rcvQueue          *SegQueue
+	sndBuf            *SegQueue
+	rcvBuf            *SegQueue
+	WindRcvLen        uint32
+	OverHeadSize      uint32
+	rmtWnd            uint16
+	sndNext           uint32
+	rcvNext           uint32
+	rcvWind           uint16
+	sndWind           uint16
+	mtu               uint32
+	ackList           []AckNode
+	sendBitFlag       uint32
+	probeWait         uint32
+	tsWait            uint32
+	noCwnd            bool
+	cwnd              uint16
+	RxRto             uint32
+	RxSrtt            uint32
+	RxRttval          uint32
+	fastAckThreshould uint32
+	fastXmitLimit     uint32
+	state             int
+	deadLinkXmitLimit uint32
+	sshthresh         uint32
+	incr              uint16
+	outPutFun         func(data []byte)
+}
+
+func NewKcpB(conv uint32) *KCPB {
+	kcpb := &KCPB{}
+	kcpb.conv = conv
+	kcpb.sndWind = IKCP_WND_SND
+	kcpb.rcvWind = IKCP_WND_RCV
+	kcpb.rmtWnd = IKCP_WND_RCV
+	kcpb.mtu = IKCP_MTE_DEF
+	kcpb.mss = kcpb.mtu - IKCP_OVERHEAD
+	kcpb.rcvQueue = NewSegQueue()
+	kcpb.sndQueue = NewSegQueue()
+	kcpb.rcvBuf = NewSegQueue()
+	kcpb.sndBuf = NewSegQueue()
+	kcpb.ackList = make([]AckNode, 0)
+	kcpb.RxRto = IKCP_RTO_DEF
+	kcpb.interval = IKCP_INTERVAL
+	kcpb.tsFlush = IKCP_INTERVAL
+	kcpb.sshthresh = IKCP_SSHTHRESH_INIT
+	kcpb.fastAckThreshould = IKCP_FASTACK_LIMIT
+	return kcpb
 }
 
 func (kcp *KCPB) Send(buffer []byte) int {
@@ -114,7 +146,7 @@ func (kcp *KCPB) Send(buffer []byte) int {
 	}
 	return 0
 }
- 
+
 func (kcp *KCPB) Update(current uint32) {
 	kcp.current = current
 	if kcp.updated == 0 {
@@ -145,7 +177,6 @@ func (kcp *KCPB) ShrinkBuf() {
 	kcp.sndUna = kcp.rcvBuf.Front().Seg.Una
 }
 
-
 func (kcp *KCPB) getUnusedWindSize() uint16 {
 	if kcp.rcvQueue.Size() > int(kcp.rcvWind) {
 		return 0
@@ -154,7 +185,7 @@ func (kcp *KCPB) getUnusedWindSize() uint16 {
 }
 
 func (kcp *KCPB) output(data []byte) {
-	// TODO: code it later
+	kcp.outPutFun(data)
 }
 
 func (kcp *KCPB) Flush() {
@@ -164,7 +195,7 @@ func (kcp *KCPB) Flush() {
 	if kcp.updated == 0 {
 		return
 	}
-	
+
 	current := kcp.current
 	buffer := make([]byte, kcp.mtu)
 	var seg KCPSEG
@@ -172,25 +203,28 @@ func (kcp *KCPB) Flush() {
 	seg.Cmd = IKCP_CMD_ACK
 	seg.Wnd = kcp.getUnusedWindSize()
 
-	flushBufferFun := func (buffer []byte) {
-		if len(buffer) + IKCP_OVERHEAD > int(kcp.mtu) {
+	flushBufferFun := func(buffer []byte) []byte {
+		if len(buffer)+IKCP_OVERHEAD > int(kcp.mtu) {
 			kcp.output(buffer)
 			buffer = make([]byte, kcp.mtu)
+
 		}
-	}	
+		return buffer
+	}
+
 	for i := 0; i < len(kcp.ackList); i++ {
-		flushBufferFun(buffer)
+		buffer = flushBufferFun(buffer)
 		seg.Sn = kcp.ackList[i].Sn
 		seg.Ts = kcp.ackList[i].Ts
 		buffer = append(buffer, seg.Encode()...)
 	}
 	kcp.ackList = nil
-	
+
 	if kcp.rmtWnd == 0 {
 		if kcp.probeWait == 0 {
 			kcp.probeWait = IKCP_PROBE_INIT
 			kcp.tsWait = kcp.current + kcp.probeWait
-			
+
 		} else if kcp.tsWait > kcp.current {
 			kcp.probeWait += kcp.probeWait / 2
 			if kcp.probeWait > IKCP_PROBE_LIMIT {
@@ -199,21 +233,21 @@ func (kcp *KCPB) Flush() {
 			kcp.tsWait = kcp.current + kcp.probeWait
 			kcp.sendBitFlag |= IKCP_SEND_WASK_FLAG
 		}
-		
+
 	} else {
 		kcp.probeWait = 0
 		kcp.tsWait = 0
 	}
 
-	if kcp.sendBitFlag & IKCP_SEND_WASK_FLAG > 0{
+	if kcp.sendBitFlag&IKCP_SEND_WASK_FLAG > 0 {
 		seg.Cmd = IKCP_CMD_WASK
-		flushBufferFun(buffer)
+		buffer = flushBufferFun(buffer)
 		buffer = append(buffer, seg.Encode()...)
 	}
 
-	if kcp.sendBitFlag & IKCP_SEND_WIND_FLAG > 0 {
+	if kcp.sendBitFlag&IKCP_SEND_WIND_FLAG > 0 {
 		seg.Cmd = IKCP_CMD_WINS
-		flushBufferFun(buffer)
+		buffer = flushBufferFun(buffer)
 		buffer = append(buffer, seg.Encode()...)
 	}
 
@@ -225,7 +259,7 @@ func (kcp *KCPB) Flush() {
 	if kcp.noCwnd { // TODO: check it
 		cwnd = kcp.cwnd
 	}
-	for kcp.sndNext <= kcp.sndUna + uint32(cwnd) {
+	for kcp.sndNext <= kcp.sndUna+uint32(cwnd) {
 		if kcp.sndQueue.Size() == 0 {
 			break
 		}
@@ -238,41 +272,41 @@ func (kcp *KCPB) Flush() {
 		kcp.sndNext++
 		seg.Una = kcp.rcvNext
 		seg.Resendts = current
-		seg.Rto = kcp.RxRot
+		seg.Rto = kcp.RxRto
 		seg.Fastack = 0
 		seg.Xmit = 0
 		kcp.rcvQueue.Push(seg)
 	}
 
 	// TODO: delete rotmin
-   for p := kcp.sndBuf.Front(); p != nil; p = p.Next {
+	for p := kcp.sndBuf.Front(); p != nil; p = p.Next {
 		seg := p.Seg
 		needSend := 0
 		if seg.Xmit == 0 {
 			needSend = 1
 			seg.Xmit = 1
-			seg.Rto = kcp.RxRot
+			seg.Rto = kcp.RxRto
 			seg.Resendts = current + seg.Rto
 		} else if current > seg.Resendts {
 			needSend = 1
 			seg.Xmit++
-			seg.Rto += kcp.RxRot / 2 // change origin kcp caculate way to add 0.5 rxrto directly
+			seg.Rto += kcp.RxRto / 2 // change origin kcp caculate way to add 0.5 rxrto directly
 			seg.Resendts = current + seg.Rto
 			lost = true
 		} else if seg.Fastack >= kcp.fastAckThreshould {
-			if(seg.Xmit <= kcp.fastXmitLimit || kcp.fastXmitLimit == 0) {
+			if seg.Xmit <= kcp.fastXmitLimit || kcp.fastXmitLimit == 0 {
 				needSend = 1
-				seg.Xmit ++
+				seg.Xmit++
 				seg.Fastack = 0
 				seg.Resendts = current + seg.Rto
-				change ++
+				change++
 			}
 		}
 		if needSend > 0 {
 			seg.Ts = current
 			seg.Wnd = kcp.getUnusedWindSize()
 			seg.Una = kcp.rcvNext
-			flushBufferFun(buffer)
+			buffer = flushBufferFun(buffer)
 			buffer = append(buffer, seg.Encode()...)
 			if seg.Len > 0 {
 				buffer = append(buffer, seg.Data...)
@@ -282,9 +316,9 @@ func (kcp *KCPB) Flush() {
 
 			}
 		}
-		
-   }
-   if len(buffer) > 0 {
+
+	}
+	if len(buffer) > 0 {
 		kcp.output(buffer)
 		buffer = nil
 	}
@@ -313,7 +347,7 @@ func (kcp *KCPB) Flush() {
 		kcp.cwnd = 1
 		kcp.incr = uint16(kcp.mss)
 	}
-	
+
 }
 
 func (kcp *KCPB) updateRcvQueue() {
@@ -334,6 +368,10 @@ func (kcp *KCPB) Input(data []byte) int {
 	//var lastestTs uint32
 	flag := 0
 	for {
+		if len(data) < IKCP_OVERHEAD {
+			break
+		}
+
 		var seg KCPSEG
 		data = ikcp_decode32u(data, &seg.Conv)
 		if seg.Conv != kcp.conv {
@@ -357,7 +395,11 @@ func (kcp *KCPB) Input(data []byte) int {
 		kcp.sndBuf.ParseUna(seg.Una)
 		kcp.ShrinkBuf() // TODO: check it if can be put back
 
-		if seg.Cmd == IKCP_CMD_ACK { // TODO: finish rto
+		if seg.Cmd == IKCP_CMD_ACK {
+			if kcp.current > seg.Ts {
+				kcp.updateRto(kcp.current - seg.Ts)
+			}
+
 			if flag == 0 {
 				flag = 1
 				maxAck = seg.Una
@@ -384,10 +426,126 @@ func (kcp *KCPB) Input(data []byte) int {
 		data = data[seg.Len:]
 
 	}
-	
+
 	if flag != 0 {
 		kcp.sndBuf.ParseFastAck(maxAck)
 	}
-	//todo: finish cwnd
+	if kcp.sndUna > prev_una {
+		if kcp.cwnd < kcp.rmtWnd {
+			mss := kcp.mss
+			if kcp.cwnd < uint16(kcp.sshthresh) {
+				kcp.cwnd++
+				kcp.incr += uint16(mss)
+
+			} else {
+				if kcp.incr < uint16(mss) {
+					kcp.incr = uint16(mss)
+				}
+				kcp.incr += (uint16(kcp.mss)*uint16(kcp.mss))/kcp.incr + (uint16(mss) / 16)
+				if (kcp.cwnd+1)*uint16(kcp.mss) <= kcp.incr {
+					kcp.cwnd++
+				}
+			}
+			if kcp.cwnd > kcp.rmtWnd {
+				kcp.cwnd = kcp.rmtWnd
+				kcp.incr = kcp.rmtWnd * uint16(mss)
+			}
+		}
+	}
+	return 0
+}
+
+func (kcp *KCPB) SetOutPut(outPutFun func(data []byte)) {
+	kcp.outPutFun = outPutFun
+}
+
+func (kcp *KCPB) updateRto(rtt uint32) {
+	var rto uint32
+	if kcp.RxSrtt == 0 {
+		kcp.RxSrtt = rtt
+		kcp.RxRttval = rtt / 2
+	} else {
+		delta := rtt - kcp.RxSrtt
+		if rtt < kcp.RxSrtt {
+			delta = kcp.RxSrtt - rtt
+		}
+		kcp.RxRttval = (3*kcp.RxRttval + delta) / 4
+		kcp.RxSrtt = (7*kcp.RxSrtt + rtt) / 8
+		if kcp.RxSrtt < 1 {
+			kcp.RxSrtt = 1
+		}
+		maxBias := kcp.interval
+		if maxBias < 4*kcp.RxRttval {
+			maxBias = 4 * kcp.RxRttval
+		}
+		rto = kcp.RxSrtt + maxBias
+		kcp.RxRto = rto
+		if kcp.RxRto > IKCP_RTO_MAX {
+			kcp.RxRto = IKCP_RTO_MAX
+		}
+		if kcp.RxRto < IKCP_RTO_MIN {
+			kcp.RxRto = IKCP_RTO_MIN
+		}
+
+	}
+}
+
+func (kcp *KCPB) getNextRecvPacketSize() int {
+	if kcp.rcvQueue.Size() == 0 || kcp.rcvQueue.Size() < int(kcp.rcvQueue.Front().Seg.Frg) {
+		return -1
+	}
+	seg := kcp.rcvQueue.Front().Seg
+	if seg.Frg == 0 {
+		return int(seg.Len)
+	}
+
+	var len uint32
+	for p := kcp.rcvQueue.Front(); p != nil; p = p.Next {
+		len += p.Seg.Len
+		if p.Seg.Frg == 0 {
+			break
+		}
+	}
+	return 0
+}
+
+func (kcp *KCPB) Recv(buffer []byte) int {
+	if kcp.rcvQueue.Size() == 0 {
+		return -1
+	}
+	nextPacketSize := kcp.getNextRecvPacketSize()
+	if nextPacketSize < 0 {
+		return -1
+	}
+	recover := false
+	if kcp.rcvQueue.Size() >= int(kcp.rcvWind) {
+		recover = true
+	}
+
+	for kcp.rcvQueue.Size() != 0 {
+		p := kcp.rcvQueue.Front()
+		seg := p.Seg
+		buffer = append(buffer, seg.Data...)
+		kcp.rcvQueue.PopFront()
+		if seg.Frg == 0 {
+			break
+		}
+	}
+
+	for kcp.rcvBuf.Size() > 0 {
+		seg := kcp.rcvBuf.Front().Seg
+		if seg.Sn == kcp.rcvNext && kcp.rcvQueue.Size() < int(kcp.rcvWind) {
+			kcp.rcvBuf.PopFront()
+			kcp.rcvQueue.PushSegment(seg)
+			kcp.rcvNext++
+		} else {
+			break
+		}
+	}
+
+	if kcp.rcvQueue.Size() < int(kcp.rcvWind) && recover {
+		kcp.sendBitFlag |= IKCP_SEND_WIND_FLAG
+	}
+
 	return 0
 }

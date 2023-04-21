@@ -1,4 +1,4 @@
-package mykcp
+package main
 
 import "encoding/binary"
 
@@ -17,12 +17,12 @@ func ikcp_decode8u(p []byte, c *uint8) []byte {
 	return p[1:]
 }
 
-func ikcp_encode32u(p []byte, l uint32) []byte{
+func ikcp_encode32u(p []byte, l uint32) []byte {
 	binary.LittleEndian.PutUint32(p, l)
 	return p[4:]
 }
 
-func ikcp_encode16u(p []byte, l uint16) []byte{
+func ikcp_encode16u(p []byte, l uint16) []byte {
 	binary.LittleEndian.PutUint16(p, l)
 	return p[2:]
 }

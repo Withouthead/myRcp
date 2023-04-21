@@ -1,4 +1,4 @@
-package mykcp
+package main
 
 type KCPSEG struct {
 	Conv     uint32
@@ -22,11 +22,12 @@ func newKcpSeg(size int) KCPSEG {
 	return kcpSeg
 }
 
-func (seg *KCPSEG) Encode() []byte{
+func (seg *KCPSEG) Encode() []byte {
 	data := make([]byte, 24)
 	data = ikcp_encode32u(data, seg.Conv)
 	data = ikcp_encode8u(data, seg.Cmd)
 	data = ikcp_encode8u(data, seg.Frg)
+	data = ikcp_encode16u(data, seg.Wnd)
 	data = ikcp_encode32u(data, seg.Ts)
 	data = ikcp_encode32u(data, seg.Sn)
 	data = ikcp_encode32u(data, seg.Len)
@@ -75,7 +76,7 @@ func (q *SegQueue) PopFront() {
 	}
 	q.head.Next = q.head.Next.Next
 	q.head.Next.Prev = q.head
-	q.len --
+	q.len--
 
 }
 func (q *SegQueue) PopBack() {
@@ -137,7 +138,7 @@ func (q *SegQueue) PushSegment(seg *KCPSEG) {
 		return
 	}
 	p := q.head.Next
-	for p.Next != nil && p.Next.Seg.Sn < seg.Sn{
+	for p.Next != nil && p.Next.Seg.Sn < seg.Sn {
 		p = p.Next
 	}
 	segNode := &SegQueueNode{Seg: seg}
