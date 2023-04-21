@@ -16,6 +16,7 @@ const (
 	IKCP_INTERVAL       = 100
 	IKCP_SSHTHRESH_INIT = 2
 	IKCP_FASTACK_LIMIT  = 5
+	IKCP_DEAD_LINK_MAX  = 5
 )
 
 const (
@@ -87,6 +88,7 @@ func NewKcpB(conv uint32) *KCPB {
 	kcpb.tsFlush = IKCP_INTERVAL
 	kcpb.sshthresh = IKCP_SSHTHRESH_INIT
 	kcpb.fastAckThreshould = IKCP_FASTACK_LIMIT
+	kcpb.deadLinkXmitLimit = IKCP_DEAD_LINK_MAX
 	return kcpb
 }
 
@@ -111,39 +113,39 @@ func (kcp *KCPB) Send(buffer []byte) int {
 		if len(buffer) <= 0 {
 			return 0
 		}
-		size = len(buffer)
-		count := 0
-		if size <= int(kcp.mss) {
-			count = 1
-		} else {
-			count = (size + int(kcp.mss) - 1) / int(kcp.mss)
-		}
-		if count >= int(kcp.WindRcvLen) {
-			return -2
-		}
-		if count == 0 {
-			count = 1
-		}
-		for i := 0; i < count; i++ {
-			if size == 0 {
-				break
-			}
-			segSize := kcp.mss
-			if int(segSize) > size {
-				segSize = uint32(size)
-			}
-			newSeg := newKcpSeg(int(segSize))
-			copy(newSeg.Data, buffer)
-			newSeg.Frg = uint8(count - i - 1)
-			if kcp.stream == 0 {
-				newSeg.Frg = 0
-			}
-			kcp.sndQueue.Push(&newSeg)
-			buffer = buffer[segSize:]
-			size = len(buffer)
-		}
-
 	}
+	size = len(buffer)
+	count := 0
+	if size <= int(kcp.mss) {
+		count = 1
+	} else {
+		count = (size + int(kcp.mss) - 1) / int(kcp.mss)
+	}
+	if count >= int(kcp.rcvWind) {
+		return -2
+	}
+	if count == 0 {
+		count = 1
+	}
+	for i := 0; i < count; i++ {
+		if size == 0 {
+			break
+		}
+		segSize := kcp.mss
+		if int(segSize) > size {
+			segSize = uint32(size)
+		}
+		newSeg := newKcpSeg(int(segSize))
+		copy(newSeg.Data, buffer)
+		newSeg.Frg = uint8(count - i - 1)
+		if kcp.stream == 0 {
+			newSeg.Frg = 0
+		}
+		kcp.sndQueue.Push(&newSeg)
+		buffer = buffer[segSize:]
+		size = len(buffer)
+	}
+
 	return 0
 }
 
@@ -197,7 +199,7 @@ func (kcp *KCPB) Flush() {
 	}
 
 	current := kcp.current
-	buffer := make([]byte, kcp.mtu)
+	buffer := make([]byte, 0)
 	var seg KCPSEG
 	seg.Conv = kcp.conv
 	seg.Cmd = IKCP_CMD_ACK
@@ -206,7 +208,7 @@ func (kcp *KCPB) Flush() {
 	flushBufferFun := func(buffer []byte) []byte {
 		if len(buffer)+IKCP_OVERHEAD > int(kcp.mtu) {
 			kcp.output(buffer)
-			buffer = make([]byte, kcp.mtu)
+			buffer = make([]byte, 0)
 
 		}
 		return buffer
@@ -275,7 +277,7 @@ func (kcp *KCPB) Flush() {
 		seg.Rto = kcp.RxRto
 		seg.Fastack = 0
 		seg.Xmit = 0
-		kcp.rcvQueue.Push(seg)
+		kcp.sndBuf.Push(seg)
 	}
 
 	// TODO: delete rotmin
@@ -306,6 +308,7 @@ func (kcp *KCPB) Flush() {
 			seg.Ts = current
 			seg.Wnd = kcp.getUnusedWindSize()
 			seg.Una = kcp.rcvNext
+			seg.Len = uint32(len(seg.Data))
 			buffer = flushBufferFun(buffer)
 			buffer = append(buffer, seg.Encode()...)
 			if seg.Len > 0 {
@@ -352,10 +355,11 @@ func (kcp *KCPB) Flush() {
 
 func (kcp *KCPB) updateRcvQueue() {
 	for kcp.rcvBuf.Size() != 0 {
-		if kcp.rcvBuf.Back().Seg.Sn == kcp.rcvNext && kcp.rcvQueue.Size() <= int(kcp.rcvWind) {
-			seg := kcp.rcvBuf.Back()
+		if kcp.rcvBuf.Front().Seg.Sn == kcp.rcvNext && kcp.rcvQueue.Size() < int(kcp.rcvWind) {
+			seg := kcp.rcvBuf.Front()
 			kcp.rcvQueue.Push(seg.Seg)
-			kcp.rcvBuf.PopBack()
+			kcp.rcvBuf.PopFront()
+			kcp.rcvNext++
 		} else {
 			break
 		}
@@ -385,6 +389,9 @@ func (kcp *KCPB) Input(data []byte) int {
 		data = ikcp_decode32u(data, &seg.Una)
 		data = ikcp_decode32u(data, &seg.Len)
 
+		if seg.Sn < kcp.rcvNext {
+			return -1
+		}
 		if len(data) < int(seg.Len) {
 			return -2
 		}
@@ -517,15 +524,17 @@ func (kcp *KCPB) Recv(buffer []byte) int {
 	if nextPacketSize < 0 {
 		return -1
 	}
-	recover := false
+	recoverFlag := false
 	if kcp.rcvQueue.Size() >= int(kcp.rcvWind) {
-		recover = true
+		recoverFlag = true
 	}
 
 	for kcp.rcvQueue.Size() != 0 {
 		p := kcp.rcvQueue.Front()
 		seg := p.Seg
-		buffer = append(buffer, seg.Data...)
+
+		copy(buffer, seg.Data)
+		buffer = buffer[len(seg.Data):]
 		kcp.rcvQueue.PopFront()
 		if seg.Frg == 0 {
 			break
@@ -543,7 +552,7 @@ func (kcp *KCPB) Recv(buffer []byte) int {
 		}
 	}
 
-	if kcp.rcvQueue.Size() < int(kcp.rcvWind) && recover {
+	if kcp.rcvQueue.Size() < int(kcp.rcvWind) && recoverFlag {
 		kcp.sendBitFlag |= IKCP_SEND_WIND_FLAG
 	}
 

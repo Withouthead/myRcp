@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/binary"
+	"log"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -10,16 +11,17 @@ import (
 )
 
 type KcpConn struct {
-	dead           int32
-	kcpb           *KCPB
-	udpConn        *net.UDPConn
-	mu             sync.Mutex
-	conectionErrCh chan struct{}
-	udpReadCh      chan []byte
-	readEventCh    chan struct{}
-	writeEventCh   chan struct{}
-	die            chan struct{}
-	remoteAddr     net.Addr
+	dead            int32
+	kcpb            *KCPB
+	readUdpPacketCh chan []byte
+	udpConn         net.PacketConn
+	mu              sync.Mutex
+	conectionErrCh  chan struct{}
+	udpReadCh       chan []byte
+	readEventCh     chan struct{}
+	writeEventCh    chan struct{}
+	die             chan struct{}
+	remoteAddr      net.Addr
 }
 
 func (conn *KcpConn) IsDead() bool {
@@ -29,22 +31,30 @@ func (conn *KcpConn) IsDead() bool {
 }
 
 func (conn *KcpConn) kcpOutPut(buf []byte) {
-	conn.udpConn.WriteTo(buf, conn.remoteAddr)
+	//conn.udpConn.WriteTo(buf, conn.remoteAddr)
+	_, err := conn.udpConn.WriteTo(buf, conn.remoteAddr)
+	if err != nil {
+		log.Fatalf("send Error %v", err)
+	} else {
+		log.Printf("send data, len %v", len(buf))
+	}
 }
 
 func (conn *KcpConn) SetDead() {
 	atomic.AddInt32(&conn.dead, 1)
 }
-func NewKcpConn(conv uint32, udpConn *net.UDPConn, remoteAddr net.Addr) *KcpConn {
+func NewKcpConn(conv uint32, udpConn net.PacketConn, remoteAddr net.Addr) *KcpConn {
 
 	kcpb := NewKcpB(conv)
 	kcpConn := &KcpConn{}
 	kcpConn.kcpb = kcpb
 	kcpConn.udpConn = udpConn
 	kcpConn.udpReadCh = make(chan []byte)
-	kcpConn.readEventCh = make(chan struct{})
+	kcpConn.readEventCh = make(chan struct{}, 1024) // TODO: make sure the chan size is ok
 	kcpConn.writeEventCh = make(chan struct{})
 	kcpConn.kcpb.SetOutPut(kcpConn.kcpOutPut)
+	kcpConn.readUdpPacketCh = make(chan []byte, 1024) // TODO: make sure the chan size is ok
+	kcpConn.remoteAddr = remoteAddr
 	go kcpConn.run()
 	go kcpConn.readUdpData()
 	return kcpConn
@@ -52,13 +62,8 @@ func NewKcpConn(conv uint32, udpConn *net.UDPConn, remoteAddr net.Addr) *KcpConn
 
 func (conn *KcpConn) readUdpData() {
 	for {
-		data := make([]byte, 0)
-		n, _, err := conn.udpConn.ReadFrom(data)
-		if err != nil {
-			conn.conectionErrCh <- struct{}{}
-			return
-		}
-		conn.udpReadCh <- data[:n]
+		data := <-conn.readUdpPacketCh
+		conn.udpReadCh <- data
 	}
 }
 
@@ -70,11 +75,15 @@ func (conn *KcpConn) input(data []byte) {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 	conn.kcpb.Input(data)
+	log.Print("data is ready to read by kcp Read function")
 	conn.readEventCh <- struct{}{}
 }
 
 func (conn *KcpConn) run() {
 	updateTime := 10 * time.Millisecond
+	if conn.remoteAddr.String() != ":9666" {
+		print("hi")
+	}
 	for !conn.IsDead() {
 		conn.mu.Lock()
 		conn.kcpb.Update(getCurrentTime())
@@ -96,6 +105,7 @@ func (conn *KcpConn) Write(data []byte) {
 	if conn.kcpb.sndWind > uint16(conn.kcpb.sndNext)-uint16(conn.kcpb.sndUna) {
 		flag := conn.kcpb.Send(data)
 		if flag == 0 {
+			conn.mu.Unlock()
 			return
 		}
 	}
@@ -104,9 +114,23 @@ func (conn *KcpConn) Write(data []byte) {
 
 func (conn *KcpConn) Read(buf []byte) {
 	for !conn.IsDead() {
+		log.Print("want to read something...")
 		conn.mu.Lock()
-		flag := conn.kcpb.Recv(buf)
-		if flag == 0 && len(buf) > 0 {
+		size := len(buf)
+		readFlag := false
+		for {
+			n := conn.kcpb.getNextRecvPacketSize()
+			if n <= 0 || n > size || size <= 0 {
+				break
+			}
+			flag := conn.kcpb.Recv(buf)
+			if flag != 0 {
+				break
+			}
+			size -= n
+			readFlag = true
+		}
+		if readFlag {
 			conn.mu.Unlock()
 			return
 		}
@@ -120,18 +144,32 @@ func (conn *KcpConn) Read(buf []byte) {
 	}
 }
 
+const ACCEPT_MAX_SIZE = 128
+
 type Listener struct {
-	udpConn    *net.UDPConn
+	udpConn    net.PacketConn
 	connectMap map[string]*KcpConn
-	chAccpets  chan *KcpConn
+	chAccepts  chan *KcpConn
 	die        chan struct{}
+}
+
+func Listen(addr string) *Listener {
+	udpAddr, _ := net.ResolveUDPAddr("udp", addr)
+	udpConn, _ := net.ListenUDP("udp", udpAddr)
+	l := &Listener{}
+	l.udpConn = udpConn
+	l.connectMap = make(map[string]*KcpConn)
+	l.chAccepts = make(chan *KcpConn, ACCEPT_MAX_SIZE)
+	l.die = make(chan struct{})
+	go l.run()
+	return l
 }
 
 func (l *Listener) Accept() *KcpConn {
 	select {
 	case <-l.die:
 		return nil
-	case c := <-l.chAccpets:
+	case c := <-l.chAccepts:
 		return c
 	}
 }
@@ -145,8 +183,14 @@ func (l *Listener) run() {
 	chPacket := make(chan packet, 8192)
 	go func() {
 		for {
-			data := make([]byte, 0)
-			n, addr, _ := l.udpConn.ReadFrom(data)
+			data := make([]byte, 1500)
+			n, addr, err := l.udpConn.ReadFrom(data)
+			if err != nil {
+				log.Fatalf("receive udp data error %v", err)
+			}
+			if n < IKCP_OVERHEAD {
+				continue
+			}
 			chPacket <- packet{addr, data[:n]}
 		}
 	}()
@@ -164,9 +208,9 @@ loop:
 			if !ok {
 				conn = NewKcpConn(conv, l.udpConn, p.Addr)
 				l.connectMap[addrString] = conn
-				l.chAccpets <- conn
+				l.chAccepts <- conn
 			} else {
-				//TODO: it
+				conn.readUdpPacketCh <- p.data // TODO: add timeout
 			}
 		case <-l.die:
 			break loop
@@ -181,6 +225,15 @@ func DialKcp(addr string) *KcpConn {
 	udpConn, _ := net.DialUDP("udp", nil, udpAddr)
 	var conv uint32
 	binary.Read(rand.Reader, binary.LittleEndian, &conv)
-	kcpConn := NewKcpConn(conv, udpConn, udpAddr)
+	kcpConn := NewKcpConn(conv, &ConnectedUDPConn{udpConn, udpConn}, udpAddr)
 	return kcpConn
+}
+
+type ConnectedUDPConn struct {
+	*net.UDPConn
+	Conn net.Conn
+}
+
+func (c *ConnectedUDPConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	return c.Write(b)
 }

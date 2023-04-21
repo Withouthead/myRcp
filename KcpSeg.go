@@ -23,15 +23,18 @@ func newKcpSeg(size int) KCPSEG {
 }
 
 func (seg *KCPSEG) Encode() []byte {
+
 	data := make([]byte, 24)
+	returnData := data
 	data = ikcp_encode32u(data, seg.Conv)
 	data = ikcp_encode8u(data, seg.Cmd)
 	data = ikcp_encode8u(data, seg.Frg)
 	data = ikcp_encode16u(data, seg.Wnd)
 	data = ikcp_encode32u(data, seg.Ts)
 	data = ikcp_encode32u(data, seg.Sn)
+	data = ikcp_encode32u(data, seg.Una)
 	data = ikcp_encode32u(data, seg.Len)
-	return data
+	return returnData
 }
 
 type SegQueueNode struct {
@@ -74,8 +77,12 @@ func (q *SegQueue) PopFront() {
 	if q.len == 0 {
 		return
 	}
+	delete(q.snToNodeMap, q.head.Next.Seg.Una)
 	q.head.Next = q.head.Next.Next
-	q.head.Next.Prev = q.head
+	if q.head.Next != nil {
+		q.head.Next.Prev = q.head
+	}
+
 	q.len--
 
 }
@@ -83,8 +90,22 @@ func (q *SegQueue) PopBack() {
 	if q.len == 0 {
 		return
 	}
+	delete(q.snToNodeMap, q.tail.Seg.Una)
 	q.tail = q.tail.Prev
 	q.tail.Next = nil
+	q.len--
+}
+
+func (q *SegQueue) deleteSeg(sn uint32) {
+	node, ok := q.snToNodeMap[sn]
+	if !ok {
+		return
+	}
+	node.Prev.Next = node.Next
+	if node.Next != nil {
+		node.Next.Prev = node.Prev
+	}
+	delete(q.snToNodeMap, sn)
 	q.len--
 }
 
@@ -93,12 +114,7 @@ func (q *SegQueue) Size() int {
 }
 
 func (q *SegQueue) ParseAck(sn uint32) {
-	node, ok := q.snToNodeMap[sn]
-	if !ok {
-		return
-	}
-	node.Prev.Next = node.Next
-	q.len--
+	q.deleteSeg(sn)
 }
 
 func (q *SegQueue) ParseUna(sn uint32) {
@@ -108,8 +124,7 @@ func (q *SegQueue) ParseUna(sn uint32) {
 	p := q.head.Next
 	for p != nil {
 		if p.Seg.Una <= sn {
-			p.Prev.Next = p.Next
-			q.len--
+			q.deleteSeg(p.Seg.Una)
 		} else {
 			break
 		}
@@ -137,15 +152,16 @@ func (q *SegQueue) PushSegment(seg *KCPSEG) {
 	if ok {
 		return
 	}
-	p := q.head.Next
-	for p.Next != nil && p.Next.Seg.Sn < seg.Sn {
-		p = p.Next
-	}
-	segNode := &SegQueueNode{Seg: seg}
-	segNode.Next = p.Next
-	if p.Next != nil {
-		p.Next.Prev = segNode
-	}
-	segNode.Prev = p
-	p.Next = segNode
+	//p := q.head.Next
+	//for p.Next != nil && p.Next.Seg.Sn < seg.Sn {
+	//	p = p.Next
+	//}
+	//segNode := &SegQueueNode{Seg: seg}
+	//segNode.Next = p.Next
+	//if p.Next != nil {
+	//	p.Next.Prev = segNode
+	//}
+	//segNode.Prev = p
+	//p.Next = segNode
+	q.Push(seg)
 }
