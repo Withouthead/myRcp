@@ -55,6 +55,7 @@ func NewSegQueue() *SegQueue {
 	q.head = &SegQueueNode{}
 	q.tail = q.head
 	q.snToNodeMap = make(map[uint32]*SegQueueNode)
+	q.len = 0
 	return q
 }
 
@@ -66,10 +67,15 @@ func (q *SegQueue) Back() *SegQueueNode {
 }
 
 func (q *SegQueue) Push(seg *KCPSEG) {
+	if _, ok := q.snToNodeMap[seg.Sn]; ok {
+		return
+	}
+
 	newNode := &SegQueueNode{Seg: seg}
 	newNode.Prev = q.tail
 	q.tail.Next = newNode
 	q.tail = newNode
+	q.snToNodeMap[seg.Sn] = newNode
 	q.len++
 }
 
@@ -84,6 +90,10 @@ func (q *SegQueue) PopFront() {
 	}
 
 	q.len--
+	if q.len == 0 {
+		q.tail = q.head
+		q.head.Next = nil
+	}
 
 }
 func (q *SegQueue) PopBack() {
@@ -94,6 +104,10 @@ func (q *SegQueue) PopBack() {
 	q.tail = q.tail.Prev
 	q.tail.Next = nil
 	q.len--
+	if q.len == 0 {
+		q.tail = q.head
+		q.head.Next = nil
+	}
 }
 
 func (q *SegQueue) deleteSeg(sn uint32) {
@@ -107,6 +121,10 @@ func (q *SegQueue) deleteSeg(sn uint32) {
 	}
 	delete(q.snToNodeMap, sn)
 	q.len--
+	if q.len == 0 {
+		q.tail = q.head
+		q.head.Next = nil
+	}
 }
 
 func (q *SegQueue) Size() int {
@@ -123,12 +141,13 @@ func (q *SegQueue) ParseUna(sn uint32) {
 	}
 	p := q.head.Next
 	for p != nil {
+		nextNode := p.Next
 		if p.Seg.Una <= sn {
 			q.deleteSeg(p.Seg.Una)
 		} else {
 			break
 		}
-		p = p.Next
+		p = nextNode
 	}
 }
 

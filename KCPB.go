@@ -1,5 +1,7 @@
 package main
 
+import "log"
+
 const (
 	IKCP_OVERHEAD       = 24
 	IKCP_PROBE_INIT     = 7000
@@ -138,6 +140,9 @@ func (kcp *KCPB) Send(buffer []byte) int {
 		newSeg := newKcpSeg(int(segSize))
 		copy(newSeg.Data, buffer)
 		newSeg.Frg = uint8(count - i - 1)
+		newSeg.Sn = kcp.sndNext
+		kcp.sndNext++
+
 		if kcp.stream == 0 {
 			newSeg.Frg = 0
 		}
@@ -204,6 +209,7 @@ func (kcp *KCPB) Flush() {
 	seg.Conv = kcp.conv
 	seg.Cmd = IKCP_CMD_ACK
 	seg.Wnd = kcp.getUnusedWindSize()
+	seg.Una = kcp.rcvNext
 
 	flushBufferFun := func(buffer []byte) []byte {
 		if len(buffer)+IKCP_OVERHEAD > int(kcp.mtu) {
@@ -270,8 +276,6 @@ func (kcp *KCPB) Flush() {
 		seg.Conv = kcp.conv
 		seg.Cmd = IKCP_CMD_PUSH
 		seg.Ts = current
-		seg.Sn = kcp.sndNext
-		kcp.sndNext++
 		seg.Una = kcp.rcvNext
 		seg.Resendts = current
 		seg.Rto = kcp.RxRto
@@ -311,6 +315,7 @@ func (kcp *KCPB) Flush() {
 			seg.Len = uint32(len(seg.Data))
 			buffer = flushBufferFun(buffer)
 			buffer = append(buffer, seg.Encode()...)
+			log.Printf("send data sn is %v", seg.Sn)
 			if seg.Len > 0 {
 				buffer = append(buffer, seg.Data...)
 			}
@@ -389,9 +394,6 @@ func (kcp *KCPB) Input(data []byte) int {
 		data = ikcp_decode32u(data, &seg.Una)
 		data = ikcp_decode32u(data, &seg.Len)
 
-		if seg.Sn < kcp.rcvNext {
-			return -1
-		}
 		if len(data) < int(seg.Len) {
 			return -2
 		}
@@ -406,14 +408,14 @@ func (kcp *KCPB) Input(data []byte) int {
 			if kcp.current > seg.Ts {
 				kcp.updateRto(kcp.current - seg.Ts)
 			}
-
+			log.Println("receive ACk, sn is %v", seg.Sn)
 			if flag == 0 {
 				flag = 1
 				maxAck = seg.Una
 			} else if maxAck < seg.Una {
 				maxAck = seg.Una
 			}
-			kcp.sndBuf.ParseAck(seg.Una)
+			kcp.sndBuf.ParseAck(seg.Sn)
 			kcp.ShrinkBuf()
 		} else if seg.Cmd == IKCP_CMD_PUSH {
 			if kcp.rcvNext+uint32(kcp.rcvWind) > seg.Una {

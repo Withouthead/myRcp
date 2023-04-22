@@ -22,6 +22,7 @@ type KcpConn struct {
 	writeEventCh    chan struct{}
 	die             chan struct{}
 	remoteAddr      net.Addr
+	isServer        bool
 }
 
 func (conn *KcpConn) IsDead() bool {
@@ -36,14 +37,14 @@ func (conn *KcpConn) kcpOutPut(buf []byte) {
 	if err != nil {
 		log.Fatalf("send Error %v", err)
 	} else {
-		log.Printf("send data, len %v", len(buf))
+		//log.Printf("send data, len %v", len(buf))
 	}
 }
 
 func (conn *KcpConn) SetDead() {
 	atomic.AddInt32(&conn.dead, 1)
 }
-func NewKcpConn(conv uint32, udpConn net.PacketConn, remoteAddr net.Addr) *KcpConn {
+func NewKcpConn(conv uint32, udpConn net.PacketConn, remoteAddr net.Addr, isServer bool) *KcpConn {
 
 	kcpb := NewKcpB(conv)
 	kcpConn := &KcpConn{}
@@ -53,7 +54,10 @@ func NewKcpConn(conv uint32, udpConn net.PacketConn, remoteAddr net.Addr) *KcpCo
 	kcpConn.readEventCh = make(chan struct{}, 1024) // TODO: make sure the chan size is ok
 	kcpConn.writeEventCh = make(chan struct{})
 	kcpConn.kcpb.SetOutPut(kcpConn.kcpOutPut)
-	kcpConn.readUdpPacketCh = make(chan []byte, 1024) // TODO: make sure the chan size is ok
+	kcpConn.isServer = isServer
+	if isServer {
+		kcpConn.readUdpPacketCh = make(chan []byte, 1024) // TODO: make sure the chan size is ok
+	}
 	kcpConn.remoteAddr = remoteAddr
 	go kcpConn.run()
 	go kcpConn.readUdpData()
@@ -61,9 +65,19 @@ func NewKcpConn(conv uint32, udpConn net.PacketConn, remoteAddr net.Addr) *KcpCo
 }
 
 func (conn *KcpConn) readUdpData() {
+	buffer := make([]byte, 1500)
 	for {
-		data := <-conn.readUdpPacketCh
-		conn.udpReadCh <- data
+		if conn.isServer {
+			data := <-conn.readUdpPacketCh
+			conn.udpReadCh <- data
+		} else {
+			n, _, err := conn.udpConn.ReadFrom(buffer)
+			if err != nil {
+				log.Fatalf("read udp error %v", err)
+			}
+			conn.udpReadCh <- buffer[:n]
+		}
+
 	}
 }
 
@@ -75,14 +89,14 @@ func (conn *KcpConn) input(data []byte) {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 	conn.kcpb.Input(data)
-	log.Print("data is ready to read by kcp Read function")
+	//log.Print("data is ready to read by kcp Read function")
 	conn.readEventCh <- struct{}{}
 }
 
 func (conn *KcpConn) run() {
 	updateTime := 10 * time.Millisecond
-	if conn.remoteAddr.String() != ":9666" {
-		print("hi")
+	if !conn.isServer {
+		print("hi") // TODO: delete it
 	}
 	for !conn.IsDead() {
 		conn.mu.Lock()
@@ -103,6 +117,7 @@ func (conn *KcpConn) run() {
 func (conn *KcpConn) Write(data []byte) {
 	conn.mu.Lock()
 	if conn.kcpb.sndWind > uint16(conn.kcpb.sndNext)-uint16(conn.kcpb.sndUna) {
+		//log.Print("use write")
 		flag := conn.kcpb.Send(data)
 		if flag == 0 {
 			conn.mu.Unlock()
@@ -112,12 +127,13 @@ func (conn *KcpConn) Write(data []byte) {
 	conn.mu.Unlock()
 }
 
-func (conn *KcpConn) Read(buf []byte) {
+func (conn *KcpConn) Read(buf []byte) int {
 	for !conn.IsDead() {
-		log.Print("want to read something...")
+		//log.Print("want to read something...")
 		conn.mu.Lock()
 		size := len(buf)
 		readFlag := false
+		totalSize := 0
 		for {
 			n := conn.kcpb.getNextRecvPacketSize()
 			if n <= 0 || n > size || size <= 0 {
@@ -128,20 +144,22 @@ func (conn *KcpConn) Read(buf []byte) {
 				break
 			}
 			size -= n
+			totalSize += n
 			readFlag = true
 		}
 		if readFlag {
 			conn.mu.Unlock()
-			return
+			return totalSize
 		}
 		conn.mu.Unlock()
 		select {
 		case <-conn.readEventCh:
 			continue
 		case <-conn.die:
-			return
+			return 0
 		}
 	}
+	return 0
 }
 
 const ACCEPT_MAX_SIZE = 128
@@ -206,7 +224,7 @@ loop:
 			conv := binary.LittleEndian.Uint32(p.data)
 			conn, ok := l.connectMap[addrString]
 			if !ok {
-				conn = NewKcpConn(conv, l.udpConn, p.Addr)
+				conn = NewKcpConn(conv, l.udpConn, p.Addr, true)
 				l.connectMap[addrString] = conn
 				l.chAccepts <- conn
 			} else {
@@ -225,7 +243,7 @@ func DialKcp(addr string) *KcpConn {
 	udpConn, _ := net.DialUDP("udp", nil, udpAddr)
 	var conv uint32
 	binary.Read(rand.Reader, binary.LittleEndian, &conv)
-	kcpConn := NewKcpConn(conv, &ConnectedUDPConn{udpConn, udpConn}, udpAddr)
+	kcpConn := NewKcpConn(conv, &ConnectedUDPConn{udpConn, udpConn}, udpAddr, false)
 	return kcpConn
 }
 
