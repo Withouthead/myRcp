@@ -13,7 +13,7 @@ func clientSend() {
 		log.Println(cnt)
 		client.Write([]byte("hello" + strconv.Itoa(cnt)))
 		cnt++
-		time.Sleep(10 * time.Second)
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 func main() {

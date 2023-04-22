@@ -308,6 +308,9 @@ func (kcp *KCPB) Flush() {
 				change++
 			}
 		}
+		if seg.Sn == 1 {
+			needSend = 0 // TODO: delete it
+		}
 		if needSend > 0 {
 			seg.Ts = current
 			seg.Wnd = kcp.getUnusedWindSize()
@@ -321,7 +324,6 @@ func (kcp *KCPB) Flush() {
 			}
 			if seg.Xmit >= kcp.deadLinkXmitLimit {
 				kcp.state = -1
-
 			}
 		}
 
@@ -411,14 +413,15 @@ func (kcp *KCPB) Input(data []byte) int {
 			log.Println("receive ACk, sn is %v", seg.Sn)
 			if flag == 0 {
 				flag = 1
-				maxAck = seg.Una
-			} else if maxAck < seg.Una {
-				maxAck = seg.Una
+				maxAck = seg.Sn
+			} else if maxAck < seg.Sn {
+				maxAck = seg.Sn
 			}
 			kcp.sndBuf.ParseAck(seg.Sn)
 			kcp.ShrinkBuf()
 		} else if seg.Cmd == IKCP_CMD_PUSH {
 			if kcp.rcvNext+uint32(kcp.rcvWind) > seg.Una {
+				log.Printf("receive Data, sn is %v", seg.Sn)
 				kcp.ackList = append(kcp.ackList, AckNode{seg.Sn, seg.Ts})
 				seg.Data = make([]byte, seg.Len)
 				copy(seg.Data, data)

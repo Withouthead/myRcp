@@ -157,7 +157,7 @@ func (q *SegQueue) ParseFastAck(sn uint32) {
 	}
 	p := q.head.Next
 	for p != nil {
-		if p.Seg.Una < sn {
+		if p.Seg.Sn < sn {
 			p.Seg.Fastack++
 		} else {
 			break
