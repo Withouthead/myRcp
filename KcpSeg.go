@@ -115,6 +115,9 @@ func (q *SegQueue) deleteSeg(sn uint32) {
 	if !ok {
 		return
 	}
+	if node == q.tail {
+		q.tail = node.Prev
+	}
 	node.Prev.Next = node.Next
 	if node.Next != nil {
 		node.Next.Prev = node.Prev

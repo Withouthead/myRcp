@@ -14,6 +14,10 @@ func KcpDebugPrintf(addr string, format string, v ...interface{}) {
 	}
 }
 
+func KcpErrorPrintf(addr string, format string, v ...interface{}) {
+	log.Fatalf(fmt.Sprintf("[%v]: ", addr)+format, v...)
+}
+
 func ikcp_decode32u(p []byte, l *uint32) []byte {
 	*l = binary.LittleEndian.Uint32(p)
 	return p[4:]

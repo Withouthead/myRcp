@@ -177,11 +177,11 @@ func (kcp *KCPB) Update(current uint32) {
 }
 
 func (kcp *KCPB) ShrinkBuf() {
-	if kcp.rcvBuf.Size() == 0 {
+	if kcp.sndBuf.Size() == 0 {
 		kcp.sndUna = kcp.sndNext
 		return
 	}
-	kcp.sndUna = kcp.rcvBuf.Front().Seg.Una
+	kcp.sndUna = kcp.sndBuf.Front().Seg.Sn
 }
 
 func (kcp *KCPB) getUnusedWindSize() uint16 {
@@ -196,7 +196,6 @@ func (kcp *KCPB) output(data []byte) {
 }
 
 func (kcp *KCPB) Flush() {
-
 	lost := false
 	change := 0
 	if kcp.updated == 0 {
@@ -267,7 +266,7 @@ func (kcp *KCPB) Flush() {
 	if kcp.noCwnd { // TODO: check it
 		cwnd = kcp.cwnd
 	}
-	for kcp.sndNext <= kcp.sndUna+uint32(cwnd) {
+	for kcp.sndBuf.Size() < int(kcp.cwnd) { // make sure send cwnd size packet at once
 		if kcp.sndQueue.Size() == 0 {
 			break
 		}
@@ -308,9 +307,9 @@ func (kcp *KCPB) Flush() {
 				change++
 			}
 		}
-		if seg.Sn == 1 {
-			needSend = 0 // TODO: delete it
-		}
+		//if seg.Sn == 1 && kcp.rmtWnd > 0 {
+		//	needSend = 0 // TODO: delete it
+		//}
 		if needSend > 0 {
 			KcpDebugPrintf(kcp.debugName, "Send Push Packet, sn %v", seg.Sn)
 			seg.Ts = current
@@ -362,10 +361,13 @@ func (kcp *KCPB) Flush() {
 
 func (kcp *KCPB) updateRcvQueue() {
 	for kcp.rcvBuf.Size() != 0 {
-		if kcp.rcvBuf.Front().Seg.Sn == kcp.rcvNext && kcp.rcvQueue.Size() < int(kcp.rcvWind) {
+		if kcp.rcvBuf.Front().Seg.Sn <= kcp.rcvNext && kcp.rcvQueue.Size() < int(kcp.rcvWind) {
 			seg := kcp.rcvBuf.Front()
-			kcp.rcvQueue.Push(seg.Seg)
 			kcp.rcvBuf.PopFront()
+			if seg.Seg.Sn != kcp.rcvNext {
+				continue
+			}
+			kcp.rcvQueue.Push(seg.Seg)
 			kcp.rcvNext++
 		} else {
 			break
@@ -374,7 +376,7 @@ func (kcp *KCPB) updateRcvQueue() {
 }
 
 func (kcp *KCPB) Input(data []byte) int {
-	prev_una := kcp.sndUna
+	prevUna := kcp.sndUna
 	var maxAck uint32
 	//var lastestTs uint32
 	flag := 0
@@ -442,7 +444,7 @@ func (kcp *KCPB) Input(data []byte) int {
 	if flag != 0 {
 		kcp.sndBuf.ParseFastAck(maxAck)
 	}
-	if kcp.sndUna > prev_una {
+	if kcp.sndUna > prevUna {
 		if kcp.cwnd < kcp.rmtWnd {
 			mss := kcp.mss
 			if kcp.cwnd < uint16(kcp.sshthresh) {

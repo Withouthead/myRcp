@@ -116,7 +116,7 @@ func (conn *KcpConn) run() {
 	}
 }
 
-func (conn *KcpConn) Write(data []byte) {
+func (conn *KcpConn) Write(data []byte) { // TODO: add ch to block function
 	conn.mu.Lock()
 	if conn.kcpb.sndWind > uint16(conn.kcpb.sndNext)-uint16(conn.kcpb.sndUna) {
 		//log.Print("use write")
@@ -125,6 +125,8 @@ func (conn *KcpConn) Write(data []byte) {
 			conn.mu.Unlock()
 			return
 		}
+	} else {
+		KcpDebugPrintf(conn.debugName, "Send Wind Full, Send Error")
 	}
 	conn.mu.Unlock()
 }
@@ -134,24 +136,18 @@ func (conn *KcpConn) Read(buf []byte) int {
 		//log.Print("want to read something...")
 		conn.mu.Lock()
 		size := len(buf)
-		readFlag := false
-		totalSize := 0
-		for {
-			n := conn.kcpb.getNextRecvPacketSize()
-			if n <= 0 || n > size || size <= 0 {
-				break
+		n := conn.kcpb.getNextRecvPacketSize()
+		if n > 0 {
+			if n > size {
+				conn.mu.Unlock()
+				return -1
 			}
+
 			flag := conn.kcpb.Recv(buf)
-			if flag != 0 {
-				break
+			if flag == 0 {
+				conn.mu.Unlock()
+				return n
 			}
-			size -= n
-			totalSize += n
-			readFlag = true
-		}
-		if readFlag {
-			conn.mu.Unlock()
-			return totalSize
 		}
 		conn.mu.Unlock()
 		select {

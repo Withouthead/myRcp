@@ -10,9 +10,9 @@ func clientSend() {
 	client := DialKcp("127.0.0.1:9666")
 	cnt := 0
 	for {
-		if cnt > 5 {
-			break
-		}
+		//if cnt > 5 {
+		//	break
+		//}
 		//log.Println(cnt)
 		client.Write([]byte("hello" + strconv.Itoa(cnt)))
 		cnt++
