@@ -1,7 +1,5 @@
 package main
 
-import "log"
-
 const (
 	IKCP_OVERHEAD       = 24
 	IKCP_PROBE_INIT     = 7000
@@ -70,9 +68,10 @@ type KCPB struct {
 	sshthresh         uint32
 	incr              uint16
 	outPutFun         func(data []byte)
+	debugName         string // For Debug
 }
 
-func NewKcpB(conv uint32) *KCPB {
+func NewKcpB(conv uint32, localAddr string) *KCPB {
 	kcpb := &KCPB{}
 	kcpb.conv = conv
 	kcpb.sndWind = IKCP_WND_SND
@@ -91,6 +90,7 @@ func NewKcpB(conv uint32) *KCPB {
 	kcpb.sshthresh = IKCP_SSHTHRESH_INIT
 	kcpb.fastAckThreshould = IKCP_FASTACK_LIMIT
 	kcpb.deadLinkXmitLimit = IKCP_DEAD_LINK_MAX
+	kcpb.debugName = "Block " + localAddr
 	return kcpb
 }
 
@@ -312,13 +312,13 @@ func (kcp *KCPB) Flush() {
 			needSend = 0 // TODO: delete it
 		}
 		if needSend > 0 {
+			KcpDebugPrintf(kcp.debugName, "Send Push Packet, sn %v", seg.Sn)
 			seg.Ts = current
 			seg.Wnd = kcp.getUnusedWindSize()
 			seg.Una = kcp.rcvNext
 			seg.Len = uint32(len(seg.Data))
 			buffer = flushBufferFun(buffer)
 			buffer = append(buffer, seg.Encode()...)
-			log.Printf("send data sn is %v", seg.Sn)
 			if seg.Len > 0 {
 				buffer = append(buffer, seg.Data...)
 			}
@@ -407,10 +407,10 @@ func (kcp *KCPB) Input(data []byte) int {
 		kcp.ShrinkBuf() // TODO: check it if can be put back
 
 		if seg.Cmd == IKCP_CMD_ACK {
+			KcpDebugPrintf(kcp.debugName, "Input get Ackpacket, sn %v", seg.Sn)
 			if kcp.current > seg.Ts {
 				kcp.updateRto(kcp.current - seg.Ts)
 			}
-			log.Println("receive ACk, sn is %v", seg.Sn)
 			if flag == 0 {
 				flag = 1
 				maxAck = seg.Sn
@@ -420,8 +420,8 @@ func (kcp *KCPB) Input(data []byte) int {
 			kcp.sndBuf.ParseAck(seg.Sn)
 			kcp.ShrinkBuf()
 		} else if seg.Cmd == IKCP_CMD_PUSH {
+			KcpDebugPrintf(kcp.debugName, "Input get Push packet, sn %v", seg.Sn)
 			if kcp.rcvNext+uint32(kcp.rcvWind) > seg.Una {
-				log.Printf("receive Data, sn is %v", seg.Sn)
 				kcp.ackList = append(kcp.ackList, AckNode{seg.Sn, seg.Ts})
 				seg.Data = make([]byte, seg.Len)
 				copy(seg.Data, data)

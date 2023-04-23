@@ -1,6 +1,18 @@
 package main
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"fmt"
+	"log"
+)
+
+const DebugMode = true
+
+func KcpDebugPrintf(addr string, format string, v ...interface{}) {
+	if DebugMode {
+		log.Printf(fmt.Sprintf("[%v]: ", addr)+format, v...)
+	}
+}
 
 func ikcp_decode32u(p []byte, l *uint32) []byte {
 	*l = binary.LittleEndian.Uint32(p)

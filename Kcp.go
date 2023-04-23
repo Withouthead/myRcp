@@ -23,6 +23,7 @@ type KcpConn struct {
 	die             chan struct{}
 	remoteAddr      net.Addr
 	isServer        bool
+	debugName       string // ForDebug
 }
 
 func (conn *KcpConn) IsDead() bool {
@@ -46,7 +47,7 @@ func (conn *KcpConn) SetDead() {
 }
 func NewKcpConn(conv uint32, udpConn net.PacketConn, remoteAddr net.Addr, isServer bool) *KcpConn {
 
-	kcpb := NewKcpB(conv)
+	kcpb := NewKcpB(conv, udpConn.LocalAddr().String())
 	kcpConn := &KcpConn{}
 	kcpConn.kcpb = kcpb
 	kcpConn.udpConn = udpConn
@@ -55,6 +56,7 @@ func NewKcpConn(conv uint32, udpConn net.PacketConn, remoteAddr net.Addr, isServ
 	kcpConn.writeEventCh = make(chan struct{})
 	kcpConn.kcpb.SetOutPut(kcpConn.kcpOutPut)
 	kcpConn.isServer = isServer
+	kcpConn.debugName = "Connection " + udpConn.LocalAddr().String()
 	if isServer {
 		kcpConn.readUdpPacketCh = make(chan []byte, 1024) // TODO: make sure the chan size is ok
 	}
@@ -169,6 +171,7 @@ type Listener struct {
 	connectMap map[string]*KcpConn
 	chAccepts  chan *KcpConn
 	die        chan struct{}
+	debugName  string
 }
 
 func Listen(addr string) *Listener {
@@ -179,6 +182,7 @@ func Listen(addr string) *Listener {
 	l.connectMap = make(map[string]*KcpConn)
 	l.chAccepts = make(chan *KcpConn, ACCEPT_MAX_SIZE)
 	l.die = make(chan struct{})
+	l.debugName = "Listener " + udpConn.LocalAddr().String()
 	go l.run()
 	return l
 }
@@ -224,9 +228,11 @@ loop:
 			conv := binary.LittleEndian.Uint32(p.data)
 			conn, ok := l.connectMap[addrString]
 			if !ok {
+				KcpDebugPrintf(l.debugName, "Accept NewConnection, addr %v", addrString)
 				conn = NewKcpConn(conv, l.udpConn, p.Addr, true)
 				l.connectMap[addrString] = conn
 				l.chAccepts <- conn
+				conn.readUdpPacketCh <- p.data
 			} else {
 				conn.readUdpPacketCh <- p.data // TODO: add timeout
 			}
