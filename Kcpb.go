@@ -31,7 +31,7 @@ type AckNode struct {
 	Ts uint32
 }
 
-type KCPB struct {
+type Kcpb struct {
 	mss               uint32
 	current           uint32
 	updated           uint32
@@ -71,8 +71,8 @@ type KCPB struct {
 	debugName         string // For Debug
 }
 
-func NewKcpB(conv uint32, localAddr string) *KCPB {
-	kcpb := &KCPB{}
+func NewKcpB(conv uint32, localAddr string) *Kcpb {
+	kcpb := &Kcpb{}
 	kcpb.conv = conv
 	kcpb.sndWind = IKCP_WND_SND
 	kcpb.rcvWind = IKCP_WND_RCV
@@ -94,7 +94,7 @@ func NewKcpB(conv uint32, localAddr string) *KCPB {
 	return kcpb
 }
 
-func (kcp *KCPB) Send(buffer []byte) int {
+func (kcp *Kcpb) Send(buffer []byte) int {
 	size := len(buffer)
 	if kcp.stream != 0 {
 		queueSize := kcp.sndQueue.Size()
@@ -154,7 +154,7 @@ func (kcp *KCPB) Send(buffer []byte) int {
 	return 0
 }
 
-func (kcp *KCPB) Update(current uint32) {
+func (kcp *Kcpb) Update(current uint32) {
 	kcp.current = current
 	if kcp.updated == 0 {
 		kcp.updated = 1
@@ -176,7 +176,7 @@ func (kcp *KCPB) Update(current uint32) {
 	}
 }
 
-func (kcp *KCPB) ShrinkBuf() {
+func (kcp *Kcpb) ShrinkBuf() {
 	if kcp.sndBuf.Size() == 0 {
 		kcp.sndUna = kcp.sndNext
 		return
@@ -184,18 +184,18 @@ func (kcp *KCPB) ShrinkBuf() {
 	kcp.sndUna = kcp.sndBuf.Front().Seg.Sn
 }
 
-func (kcp *KCPB) getUnusedWindSize() uint16 {
+func (kcp *Kcpb) getUnusedWindSize() uint16 {
 	if kcp.rcvQueue.Size() > int(kcp.rcvWind) {
 		return 0
 	}
-	return kcp.rcvWind - uint16(kcp.rcvBuf.Size())
+	return kcp.rcvWind - uint16(kcp.rcvQueue.Size())
 }
 
-func (kcp *KCPB) output(data []byte) {
+func (kcp *Kcpb) output(data []byte) {
 	kcp.outPutFun(data)
 }
 
-func (kcp *KCPB) Flush() {
+func (kcp *Kcpb) Flush() {
 	lost := false
 	change := 0
 	if kcp.updated == 0 {
@@ -204,7 +204,7 @@ func (kcp *KCPB) Flush() {
 
 	current := kcp.current
 	buffer := make([]byte, 0)
-	var seg KCPSEG
+	var seg KcpSeg
 	seg.Conv = kcp.conv
 	seg.Cmd = IKCP_CMD_ACK
 	seg.Wnd = kcp.getUnusedWindSize()
@@ -359,7 +359,7 @@ func (kcp *KCPB) Flush() {
 
 }
 
-func (kcp *KCPB) updateRcvQueue() {
+func (kcp *Kcpb) updateRcvQueue() {
 	for kcp.rcvBuf.Size() != 0 {
 		if kcp.rcvBuf.Front().Seg.Sn <= kcp.rcvNext && kcp.rcvQueue.Size() < int(kcp.rcvWind) {
 			seg := kcp.rcvBuf.Front()
@@ -375,7 +375,7 @@ func (kcp *KCPB) updateRcvQueue() {
 	}
 }
 
-func (kcp *KCPB) Input(data []byte) int {
+func (kcp *Kcpb) Input(data []byte) int {
 	prevUna := kcp.sndUna
 	var maxAck uint32
 	//var lastestTs uint32
@@ -385,7 +385,7 @@ func (kcp *KCPB) Input(data []byte) int {
 			break
 		}
 
-		var seg KCPSEG
+		var seg KcpSeg
 		data = ikcp_decode32u(data, &seg.Conv)
 		if seg.Conv != kcp.conv {
 			return -1
@@ -423,12 +423,14 @@ func (kcp *KCPB) Input(data []byte) int {
 			kcp.ShrinkBuf()
 		} else if seg.Cmd == IKCP_CMD_PUSH {
 			KcpDebugPrintf(kcp.debugName, "Input get Push packet, sn %v", seg.Sn)
-			if kcp.rcvNext+uint32(kcp.rcvWind) > seg.Una {
+			if kcp.rcvNext+uint32(kcp.rcvWind) > seg.Sn {
 				kcp.ackList = append(kcp.ackList, AckNode{seg.Sn, seg.Ts})
 				seg.Data = make([]byte, seg.Len)
 				copy(seg.Data, data)
 				kcp.rcvBuf.PushSegment(&seg)
 				kcp.updateRcvQueue()
+			} else {
+				KcpDebugPrintf(kcp.debugName, "Recv Wind Full, sn %v lose", seg.Sn)
 			}
 		} else if seg.Cmd == IKCP_CMD_WASK {
 			kcp.sendBitFlag |= IKCP_SEND_WIND_FLAG
@@ -469,11 +471,11 @@ func (kcp *KCPB) Input(data []byte) int {
 	return 0
 }
 
-func (kcp *KCPB) SetOutPut(outPutFun func(data []byte)) {
+func (kcp *Kcpb) SetOutPut(outPutFun func(data []byte)) {
 	kcp.outPutFun = outPutFun
 }
 
-func (kcp *KCPB) updateRto(rtt uint32) {
+func (kcp *Kcpb) updateRto(rtt uint32) {
 	var rto uint32
 	if kcp.RxSrtt == 0 {
 		kcp.RxSrtt = rtt
@@ -504,7 +506,7 @@ func (kcp *KCPB) updateRto(rtt uint32) {
 	}
 }
 
-func (kcp *KCPB) getNextRecvPacketSize() int {
+func (kcp *Kcpb) getNextRecvPacketSize() int {
 	if kcp.rcvQueue.Size() == 0 || kcp.rcvQueue.Size() < int(kcp.rcvQueue.Front().Seg.Frg) {
 		return -1
 	}
@@ -523,7 +525,7 @@ func (kcp *KCPB) getNextRecvPacketSize() int {
 	return 0
 }
 
-func (kcp *KCPB) Recv(buffer []byte) int {
+func (kcp *Kcpb) Recv(buffer []byte) int {
 	if kcp.rcvQueue.Size() == 0 {
 		return -1
 	}

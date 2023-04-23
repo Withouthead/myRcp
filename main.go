@@ -25,6 +25,7 @@ func main() {
 	go clientSend()
 	conn := listener.Accept()
 	buf := make([]byte, 1024)
+	time.Sleep(1 * time.Minute)
 	for {
 		size := conn.Read(buf)
 		log.Println("Get " + string(buf[:size]))

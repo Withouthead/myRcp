@@ -12,7 +12,7 @@ import (
 
 type KcpConn struct {
 	dead            int32
-	kcpb            *KCPB
+	kcpb            *Kcpb
 	readUdpPacketCh chan []byte
 	udpConn         net.PacketConn
 	mu              sync.Mutex
