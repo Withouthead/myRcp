@@ -7,7 +7,7 @@ import (
 )
 
 func clientSend() {
-	client := DialKcp("127.0.0.1:9666")
+	client := DialRcp("127.0.0.1:9666")
 	cnt := 0
 	for {
 		//if cnt > 5 {

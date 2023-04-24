@@ -10,9 +10,9 @@ import (
 	"time"
 )
 
-type KcpConn struct {
+type RcpConn struct {
 	dead            int32
-	kcpb            *Kcpb
+	kcpb            *Rcpb
 	readUdpPacketCh chan []byte
 	udpConn         net.PacketConn
 	mu              sync.Mutex
@@ -26,13 +26,13 @@ type KcpConn struct {
 	debugName       string // ForDebug
 }
 
-func (conn *KcpConn) IsDead() bool {
+func (conn *RcpConn) IsDead() bool {
 	var flag int32
 	atomic.LoadInt32(&flag)
 	return flag > 0
 }
 
-func (conn *KcpConn) kcpOutPut(buf []byte) {
+func (conn *RcpConn) kcpOutPut(buf []byte) {
 	//conn.udpConn.WriteTo(buf, conn.remoteAddr)
 	_, err := conn.udpConn.WriteTo(buf, conn.remoteAddr)
 	if err != nil {
@@ -42,13 +42,13 @@ func (conn *KcpConn) kcpOutPut(buf []byte) {
 	}
 }
 
-func (conn *KcpConn) SetDead() {
+func (conn *RcpConn) SetDead() {
 	atomic.AddInt32(&conn.dead, 1)
 }
-func NewKcpConn(conv uint32, udpConn net.PacketConn, remoteAddr net.Addr, isServer bool) *KcpConn {
+func NewKcpConn(conv uint32, udpConn net.PacketConn, remoteAddr net.Addr, isServer bool) *RcpConn {
 
 	kcpb := NewKcpB(conv, udpConn.LocalAddr().String())
-	kcpConn := &KcpConn{}
+	kcpConn := &RcpConn{}
 	kcpConn.kcpb = kcpb
 	kcpConn.udpConn = udpConn
 	kcpConn.udpReadCh = make(chan []byte)
@@ -66,7 +66,7 @@ func NewKcpConn(conv uint32, udpConn net.PacketConn, remoteAddr net.Addr, isServ
 	return kcpConn
 }
 
-func (conn *KcpConn) readUdpData() {
+func (conn *RcpConn) readUdpData() {
 	buffer := make([]byte, 1500)
 	for {
 		if conn.isServer {
@@ -87,7 +87,7 @@ func getCurrentTime() uint32 {
 	return uint32(time.Now().UnixMilli())
 }
 
-func (conn *KcpConn) input(data []byte) {
+func (conn *RcpConn) input(data []byte) {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 	conn.kcpb.Input(data)
@@ -95,7 +95,7 @@ func (conn *KcpConn) input(data []byte) {
 	conn.readEventCh <- struct{}{}
 }
 
-func (conn *KcpConn) run() {
+func (conn *RcpConn) run() {
 	updateTime := 10 * time.Millisecond
 	if !conn.isServer {
 		print("hi") // TODO: delete it
@@ -116,7 +116,7 @@ func (conn *KcpConn) run() {
 	}
 }
 
-func (conn *KcpConn) Write(data []byte) { // TODO: add ch to block function
+func (conn *RcpConn) Write(data []byte) { // TODO: add ch to block function
 	conn.mu.Lock()
 	if conn.kcpb.sndWind > uint16(conn.kcpb.sndNext)-uint16(conn.kcpb.sndUna) {
 		//log.Print("use write")
@@ -126,12 +126,12 @@ func (conn *KcpConn) Write(data []byte) { // TODO: add ch to block function
 			return
 		}
 	} else {
-		KcpDebugPrintf(conn.debugName, "Send Wind Full, Send Error")
+		RcpDebugPrintf(conn.debugName, "Send Wind Full, Send Error")
 	}
 	conn.mu.Unlock()
 }
 
-func (conn *KcpConn) Read(buf []byte) int {
+func (conn *RcpConn) Read(buf []byte) int {
 	for !conn.IsDead() {
 		//log.Print("want to read something...")
 		conn.mu.Lock()
@@ -164,8 +164,8 @@ const ACCEPT_MAX_SIZE = 128
 
 type Listener struct {
 	udpConn    net.PacketConn
-	connectMap map[string]*KcpConn
-	chAccepts  chan *KcpConn
+	connectMap map[string]*RcpConn
+	chAccepts  chan *RcpConn
 	die        chan struct{}
 	debugName  string
 }
@@ -175,15 +175,15 @@ func Listen(addr string) *Listener {
 	udpConn, _ := net.ListenUDP("udp", udpAddr)
 	l := &Listener{}
 	l.udpConn = udpConn
-	l.connectMap = make(map[string]*KcpConn)
-	l.chAccepts = make(chan *KcpConn, ACCEPT_MAX_SIZE)
+	l.connectMap = make(map[string]*RcpConn)
+	l.chAccepts = make(chan *RcpConn, ACCEPT_MAX_SIZE)
 	l.die = make(chan struct{})
 	l.debugName = "Listener " + udpConn.LocalAddr().String()
 	go l.run()
 	return l
 }
 
-func (l *Listener) Accept() *KcpConn {
+func (l *Listener) Accept() *RcpConn {
 	select {
 	case <-l.die:
 		return nil
@@ -224,7 +224,7 @@ loop:
 			conv := binary.LittleEndian.Uint32(p.data)
 			conn, ok := l.connectMap[addrString]
 			if !ok {
-				KcpDebugPrintf(l.debugName, "Accept NewConnection, addr %v", addrString)
+				RcpDebugPrintf(l.debugName, "Accept NewConnection, addr %v", addrString)
 				conn = NewKcpConn(conv, l.udpConn, p.Addr, true)
 				l.connectMap[addrString] = conn
 				l.chAccepts <- conn
@@ -240,7 +240,7 @@ loop:
 	l.udpConn.Close()
 }
 
-func DialKcp(addr string) *KcpConn {
+func DialRcp(addr string) *RcpConn {
 	udpAddr, _ := net.ResolveUDPAddr("udp", addr)
 	udpConn, _ := net.DialUDP("udp", nil, udpAddr)
 	var conv uint32

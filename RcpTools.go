@@ -8,7 +8,7 @@ import (
 
 const DebugMode = true
 
-func KcpDebugPrintf(addr string, format string, v ...interface{}) {
+func RcpDebugPrintf(addr string, format string, v ...interface{}) {
 	if DebugMode {
 		log.Printf(fmt.Sprintf("[%v]: ", addr)+format, v...)
 	}

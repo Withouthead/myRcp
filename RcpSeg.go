@@ -1,6 +1,6 @@
 package main
 
-type KcpSeg struct {
+type RcpSeg struct {
 	Conv     uint32
 	Cmd      uint8
 	Frg      uint8
@@ -16,13 +16,13 @@ type KcpSeg struct {
 	Data     []byte
 }
 
-func newKcpSeg(size int) KcpSeg {
-	kcpSeg := KcpSeg{}
+func newKcpSeg(size int) RcpSeg {
+	kcpSeg := RcpSeg{}
 	kcpSeg.Data = make([]byte, size)
 	return kcpSeg
 }
 
-func (seg *KcpSeg) Encode() []byte {
+func (seg *RcpSeg) Encode() []byte {
 
 	data := make([]byte, 24)
 	returnData := data
@@ -40,7 +40,7 @@ func (seg *KcpSeg) Encode() []byte {
 type SegQueueNode struct {
 	Next *SegQueueNode
 	Prev *SegQueueNode
-	Seg  *KcpSeg
+	Seg  *RcpSeg
 }
 
 type SegQueue struct {
@@ -66,7 +66,7 @@ func (q *SegQueue) Back() *SegQueueNode {
 	return q.tail
 }
 
-func (q *SegQueue) Push(seg *KcpSeg) {
+func (q *SegQueue) Push(seg *RcpSeg) {
 	if _, ok := q.snToNodeMap[seg.Sn]; ok {
 		return
 	}
@@ -169,7 +169,7 @@ func (q *SegQueue) ParseFastAck(sn uint32) {
 	}
 }
 
-func (q *SegQueue) PushSegment(seg *KcpSeg) {
+func (q *SegQueue) PushSegment(seg *RcpSeg) {
 	_, ok := q.snToNodeMap[seg.Sn]
 	if ok {
 		return
