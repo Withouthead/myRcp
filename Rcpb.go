@@ -69,6 +69,9 @@ type Rcpb struct {
 	incr              uint16
 	outPutFun         func(data []byte)
 	debugName         string // For Debug
+
+	//For Test
+	SendMask map[uint32]struct{}
 }
 
 func NewKcpB(conv uint32, localAddr string) *Rcpb {
@@ -91,6 +94,7 @@ func NewKcpB(conv uint32, localAddr string) *Rcpb {
 	kcpb.fastAckThreshould = IKCP_FASTACK_LIMIT
 	kcpb.deadLinkXmitLimit = IKCP_DEAD_LINK_MAX
 	kcpb.debugName = "Block " + localAddr
+	kcpb.SendMask = make(map[uint32]struct{})
 	return kcpb
 }
 
@@ -196,7 +200,12 @@ func (kcp *Rcpb) output(data []byte) {
 }
 
 func (kcp *Rcpb) Flush() {
-	lost := false
+	if kcp.debugName != "Block 127.0.0.1:9666" {
+		//println("hi")
+	}
+
+	// FIXME: Just For Test
+	//lost := false
 	change := 0
 	if kcp.updated == 0 {
 		return
@@ -297,7 +306,7 @@ func (kcp *Rcpb) Flush() {
 			seg.Xmit++
 			seg.Rto += kcp.RxRto / 2 // change origin kcp caculate way to add 0.5 rxrto directly
 			seg.Resendts = current + seg.Rto
-			lost = true
+			//lost = true
 		} else if seg.Fastack >= kcp.fastAckThreshould {
 			if seg.Xmit <= kcp.fastXmitLimit || kcp.fastXmitLimit == 0 {
 				needSend = 1
@@ -310,6 +319,16 @@ func (kcp *Rcpb) Flush() {
 		//if seg.Sn == 1 && kcp.rmtWnd > 0 {
 		//	needSend = 0 // TODO: delete it
 		//}
+
+		// TODO: For Test
+		if _, ok := kcp.SendMask[seg.Sn]; ok {
+			needSend = 0
+			if seg.Xmit == 1 {
+				RcpDebugPrintf(kcp.debugName, "Send Push Packet, sn %v, but blocked", seg.Sn)
+			}
+
+		}
+
 		if needSend > 0 {
 			RcpDebugPrintf(kcp.debugName, "Send Push Packet, sn %v", seg.Sn)
 			seg.Ts = current
@@ -343,14 +362,15 @@ func (kcp *Rcpb) Flush() {
 
 	}
 
-	if lost {
-		kcp.sshthresh = uint32(cwnd) / 2
-		if kcp.sshthresh < IKCP_THRESH_MIN {
-			kcp.sshthresh = IKCP_THRESH_MIN
-		}
-		kcp.cwnd = 1
-		kcp.incr = uint16(kcp.mss)
-	}
+	//FIXME: just for test
+	//if lost {
+	//	kcp.sshthresh = uint32(cwnd) / 2
+	//	if kcp.sshthresh < IKCP_THRESH_MIN {
+	//		kcp.sshthresh = IKCP_THRESH_MIN
+	//	}
+	//	kcp.cwnd = 1
+	//	kcp.incr = uint16(kcp.mss)
+	//}
 
 	if kcp.cwnd < 1 {
 		kcp.cwnd = 1
@@ -409,7 +429,7 @@ func (kcp *Rcpb) Input(data []byte) int {
 		kcp.ShrinkBuf() // TODO: check it if can be put back
 
 		if seg.Cmd == IKCP_CMD_ACK {
-			RcpDebugPrintf(kcp.debugName, "Input get Ackpacket, sn %v", seg.Sn)
+
 			if kcp.current > seg.Ts {
 				kcp.updateRto(kcp.current - seg.Ts)
 			}
@@ -422,6 +442,9 @@ func (kcp *Rcpb) Input(data []byte) int {
 			kcp.sndBuf.ParseAck(seg.Sn)
 			kcp.ShrinkBuf()
 		} else if seg.Cmd == IKCP_CMD_PUSH {
+			if seg.Sn == 1 {
+				println("hi")
+			}
 			RcpDebugPrintf(kcp.debugName, "Input get Push packet, sn %v", seg.Sn)
 			if kcp.rcvNext+uint32(kcp.rcvWind) > seg.Sn {
 				kcp.ackList = append(kcp.ackList, AckNode{seg.Sn, seg.Ts})

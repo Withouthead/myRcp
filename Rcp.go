@@ -131,6 +131,18 @@ func (conn *RcpConn) Write(data []byte) { // TODO: add ch to block function
 	conn.mu.Unlock()
 }
 
+func (conn *RcpConn) SetRecvWindSize(size uint16) {
+	conn.kcpb.rcvWind = size
+}
+
+func (conn *RcpConn) AddSendMask(sn uint32) {
+	conn.kcpb.SendMask[sn] = struct{}{}
+}
+
+func (conn *RcpConn) ClearSendMask() {
+	conn.kcpb.SendMask = make(map[uint32]struct{})
+}
+
 func (conn *RcpConn) Read(buf []byte) int {
 	for !conn.IsDead() {
 		//log.Print("want to read something...")

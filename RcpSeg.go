@@ -174,16 +174,27 @@ func (q *SegQueue) PushSegment(seg *RcpSeg) {
 	if ok {
 		return
 	}
-	//p := q.head.Next
-	//for p.Next != nil && p.Next.Seg.Sn < seg.Sn {
-	//	p = p.Next
-	//}
-	//segNode := &SegQueueNode{Seg: seg}
-	//segNode.Next = p.Next
-	//if p.Next != nil {
-	//	p.Next.Prev = segNode
-	//}
-	//segNode.Prev = p
-	//p.Next = segNode
-	q.Push(seg)
+	segNode := &SegQueueNode{Seg: seg}
+	if q.Size() == 0 {
+
+		q.head.Next = segNode
+		segNode.Prev = q.head
+		q.tail = segNode
+	} else {
+		p := q.head
+		for p.Next != nil && p.Next.Seg.Sn < seg.Sn {
+			p = p.Next
+		}
+		segNode.Next = p.Next
+		if p.Next != nil {
+			p.Next.Prev = segNode
+		} else {
+			q.tail = segNode
+		}
+		segNode.Prev = p
+		p.Next = segNode
+	}
+	q.len++
+	q.snToNodeMap[seg.Sn] = segNode
+	//q.Push(seg)
 }
