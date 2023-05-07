@@ -1,4 +1,4 @@
-package main
+package Rcp
 
 type RcpSeg struct {
 	Conv     uint32
@@ -16,7 +16,7 @@ type RcpSeg struct {
 	Data     []byte
 }
 
-func newKcpSeg(size int) RcpSeg {
+func newRcpSeg(size int) RcpSeg {
 	kcpSeg := RcpSeg{}
 	kcpSeg.Data = make([]byte, size)
 	return kcpSeg

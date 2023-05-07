@@ -1,4 +1,4 @@
-package main
+package Rcp
 
 import (
 	"crypto/rand"
@@ -98,12 +98,11 @@ func (conn *RcpConn) input(data []byte) {
 func (conn *RcpConn) run() {
 	updateTime := 10 * time.Millisecond
 	if !conn.isServer {
-		print("hi") // TODO: delete it
+		//print("hi") // TODO: delete it
 	}
 	for !conn.IsDead() {
 		conn.mu.Lock()
 		conn.kcpb.Update(getCurrentTime())
-
 		conn.mu.Unlock()
 		select {
 		case data := <-conn.udpReadCh:
@@ -115,20 +114,34 @@ func (conn *RcpConn) run() {
 		}
 	}
 }
+func (conn *RcpConn) Close() {
+	close(conn.die)
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	conn.kcpb.Flush()
+}
 
 func (conn *RcpConn) Write(data []byte) { // TODO: add ch to block function
-	conn.mu.Lock()
-	if conn.kcpb.sndWind > uint16(conn.kcpb.sndNext)-uint16(conn.kcpb.sndUna) {
-		//log.Print("use write")
-		flag := conn.kcpb.Send(data)
-		if flag == 0 {
-			conn.mu.Unlock()
-			return
+	for {
+		conn.mu.Lock()
+		if conn.kcpb.sndWind > uint16(conn.kcpb.sndNext)-uint16(conn.kcpb.sndUna) {
+			//log.Print("use write")
+			flag := conn.kcpb.Send(data)
+			if flag == 0 {
+				conn.mu.Unlock()
+				return
+			}
+		} else {
+			RcpDebugPrintf(conn.debugName, "Send Wind Full, Send Error")
 		}
-	} else {
-		RcpDebugPrintf(conn.debugName, "Send Wind Full, Send Error")
+		conn.mu.Unlock()
+		select {
+		case <-conn.die:
+			return
+		case <-time.After(10 * time.Millisecond):
+			continue
+		}
 	}
-	conn.mu.Unlock()
 }
 
 func (conn *RcpConn) SetRecvWindSize(size uint16) {
@@ -143,6 +156,14 @@ func (conn *RcpConn) ClearSendMask() {
 	conn.kcpb.SendMask = make(map[uint32]struct{})
 }
 
+func (conn *RcpConn) GetSendSpeedAndSendSum() (float64, uint32) {
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	bts := conn.kcpb.GetSendSpeedBts()
+	sum := conn.kcpb.sendByteSum
+	conn.kcpb.ClearUpSendSpeedTime()
+	return bts, sum
+}
 func (conn *RcpConn) Read(buf []byte) int {
 	for !conn.IsDead() {
 		//log.Print("want to read something...")
