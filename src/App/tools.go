@@ -3,23 +3,30 @@ package App
 import (
 	"bytes"
 	"encoding/gob"
+	"log"
 )
 
 type TransportStruct struct {
-	fileName string
-	data     []byte
+	FileName string
+	Data     []byte
 }
 
 func decodeTransportStruct(data []byte) TransportStruct {
 	var outputBuffer bytes.Buffer
 	outputBuffer.Write(data)
 	var transData TransportStruct
-	gob.NewDecoder(&outputBuffer).Decode(&transData)
+	err := gob.NewDecoder(&outputBuffer).Decode(&transData)
+	if err != nil {
+		log.Fatalln(err)
+	}
 	return transData
 }
 
 func encodeTransportStruct(data TransportStruct) []byte {
 	var inputBuffer bytes.Buffer
-	gob.NewEncoder(&inputBuffer).Encode(&data)
+	err := gob.NewEncoder(&inputBuffer).Encode(&data)
+	if err != nil {
+		log.Fatalln(err)
+	}
 	return inputBuffer.Bytes()
 }

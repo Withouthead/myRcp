@@ -105,8 +105,9 @@ func NewKcpB(conv uint32, localAddr string) *Rcpb {
 	return rcpb
 }
 
-func (rcp *Rcpb) Close() int {
-
+func (rcp *Rcpb) Close() {
+	rcp.state = -1
+	rcp.Flush()
 }
 
 func (rcp *Rcpb) Send(buffer []byte) int {
@@ -221,15 +222,12 @@ func (rcp *Rcpb) ClearUpSendSpeedTime() {
 }
 func (rcp *Rcpb) Flush() {
 	if rcp.debugName != "Block 127.0.0.1:9666" {
-		//println("hi")
+		println("hi")
 	}
 
 	// FIXME: Just For Test
 	//lost := false
 	change := 0
-	if rcp.updated == 0 {
-		return
-	}
 
 	current := rcp.current
 	buffer := make([]byte, 0)
@@ -590,6 +588,7 @@ func (rcp *Rcpb) Recv(buffer []byte) int {
 		recoverFlag = true
 	}
 
+	packetFinishFlag := false
 	for rcp.rcvQueue.Size() != 0 {
 		p := rcp.rcvQueue.Front()
 		seg := p.Seg
@@ -598,6 +597,7 @@ func (rcp *Rcpb) Recv(buffer []byte) int {
 		buffer = buffer[len(seg.Data):]
 		rcp.rcvQueue.PopFront()
 		if seg.Frg == 0 {
+			packetFinishFlag = true
 			break
 		}
 	}
@@ -617,5 +617,8 @@ func (rcp *Rcpb) Recv(buffer []byte) int {
 		rcp.sendBitFlag |= IKCP_SEND_WIND_FLAG
 	}
 
-	return 0
+	if packetFinishFlag {
+		return 0
+	}
+	return -2
 }

@@ -1,11 +1,11 @@
 package App
 
 import (
-	"Rcp"
+	"Rcp/src/Rcp"
+	"github.com/schollz/progressbar/v3"
 	"log"
 	"os"
 	"path/filepath"
-	progressbar "pkg/mod/github.com/schollz/progressbar/v3v3.13.1"
 	"time"
 )
 
@@ -27,7 +27,7 @@ func (c *UploadDataClient) printSendInfo(conn *Rcp.RcpConn, fileName string, byt
 	for count < int(byteSum) {
 		_, size := conn.GetSendSpeedAndSendSum()
 		count += int(size)
-		bar.Add(count)
+		bar.Add(int(size))
 		<-time.After(1 * time.Second)
 	}
 }
@@ -35,7 +35,9 @@ func (c *UploadDataClient) printSendInfo(conn *Rcp.RcpConn, fileName string, byt
 func (c *UploadDataClient) SendFile(filePath string) {
 	fileName := filepath.Base(filePath)
 	b, _ := os.ReadFile(filePath)
-	data := encodeTransportStruct(TransportStruct{fileName, b})
+	newByte := make([]byte, len(b))
+	copy(newByte, b)
+	data := encodeTransportStruct(TransportStruct{fileName, newByte})
 	conn := Rcp.DialRcp(c.remoteAddr)
 	conn.Write(data)
 	conn.Close()

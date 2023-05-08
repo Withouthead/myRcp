@@ -54,6 +54,7 @@ func NewKcpConn(conv uint32, udpConn net.PacketConn, remoteAddr net.Addr, isServ
 	kcpConn.udpReadCh = make(chan []byte)
 	kcpConn.readEventCh = make(chan struct{}, 1024) // TODO: make sure the chan size is ok
 	kcpConn.writeEventCh = make(chan struct{})
+	kcpConn.die = make(chan struct{})
 	kcpConn.kcpb.SetOutPut(kcpConn.kcpOutPut)
 	kcpConn.isServer = isServer
 	kcpConn.debugName = "Connection " + udpConn.LocalAddr().String()
@@ -164,7 +165,16 @@ func (conn *RcpConn) GetSendSpeedAndSendSum() (float64, uint32) {
 	conn.kcpb.ClearUpSendSpeedTime()
 	return bts, sum
 }
-func (conn *RcpConn) Read(buf []byte) int {
+
+const (
+	READERROR_SUCCESS = iota
+	READERROR_BUF_SIZE_NOT_ENOUGHt
+	READERROR_FRG_NOT_FINISH
+	READERROR_CONN_DIE
+)
+
+func (conn *RcpConn) Read(buf []byte) (int, int) {
+	recvCount := 0
 	for !conn.IsDead() {
 		//log.Print("want to read something...")
 		conn.mu.Lock()
@@ -173,13 +183,17 @@ func (conn *RcpConn) Read(buf []byte) int {
 		if n > 0 {
 			if n > size {
 				conn.mu.Unlock()
-				return -1
+				return recvCount, READERROR_BUF_SIZE_NOT_ENOUGHt
 			}
 
 			flag := conn.kcpb.Recv(buf)
 			if flag == 0 {
+				recvCount += n
 				conn.mu.Unlock()
-				return n
+				return recvCount, READERROR_SUCCESS
+			} else if flag != -1 {
+				recvCount += n
+				buf = buf[n:]
 			}
 		}
 		conn.mu.Unlock()
@@ -187,10 +201,10 @@ func (conn *RcpConn) Read(buf []byte) int {
 		case <-conn.readEventCh:
 			continue
 		case <-conn.die:
-			return 0
+			return recvCount, READERROR_CONN_DIE
 		}
 	}
-	return 0
+	return recvCount, READERROR_CONN_DIE
 }
 
 const ACCEPT_MAX_SIZE = 128
