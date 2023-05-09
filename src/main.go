@@ -2,6 +2,7 @@ package main
 
 import (
 	"Rcp/src/App"
+	"github.com/sasha-s/go-deadlock"
 	"time"
 )
 
@@ -12,6 +13,7 @@ func StartServer() {
 }
 
 func main() {
+	deadlock.Opts.DeadlockTimeout = time.Second
 	go StartServer()
 	client := App.UploadDataClient{}
 	client.Init("127.0.0.1:9666")

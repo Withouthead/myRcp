@@ -9,6 +9,10 @@ import (
 const DebugMode = true
 
 func RcpDebugPrintf(addr string, format string, v ...interface{}) {
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
+	//if addr == "Block 127.0.0.1:9666" {
+	//	return
+	//} // TODO: delete it
 	if DebugMode {
 		log.Printf(fmt.Sprintf("[%v]: ", addr)+format, v...)
 	}

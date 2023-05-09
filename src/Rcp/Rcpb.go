@@ -10,7 +10,7 @@ const (
 	IKCP_SEND_WASK_FLAG = 2
 	IKCP_THRESH_MIN     = 2
 	IKCP_RTO_MAX        = 60000
-	IKCP_WND_SND        = 32
+	IKCP_WND_SND        = 128
 	IKCP_WND_RCV        = 128
 	IKCP_MTE_DEF        = 1400
 	IKCP_RTO_DEF        = 200
@@ -102,6 +102,7 @@ func NewKcpB(conv uint32, localAddr string) *Rcpb {
 	rcpb.deadLinkXmitLimit = IKCP_DEAD_LINK_MAX
 	rcpb.debugName = "Block " + localAddr
 	rcpb.SendMask = make(map[uint32]struct{})
+	rcpb.cwnd = 1
 	return rcpb
 }
 
@@ -194,7 +195,11 @@ func (rcp *Rcpb) Update(current uint32) {
 
 func (rcp *Rcpb) ShrinkBuf() {
 	if rcp.sndBuf.Size() == 0 {
-		rcp.sndUna = rcp.sndNext
+		if rcp.sndQueue.Size() == 0 {
+			rcp.sndUna = rcp.sndNext
+			return
+		}
+		rcp.sndUna = rcp.sndQueue.Front().Seg.Sn
 		return
 	}
 	rcp.sndUna = rcp.sndBuf.Front().Seg.Sn
@@ -211,14 +216,19 @@ func (rcp *Rcpb) output(data []byte) {
 	rcp.outPutFun(data)
 }
 
-func (rcp *Rcpb) GetSendSpeedBts() float64 {
-	return float64(rcp.sendByteSum/rcp.SpeedTimeSum) / 100.0
-}
-
 func (rcp *Rcpb) ClearUpSendSpeedTime() {
 	rcp.sendByteSum = 0
 	rcp.SpeedTimeSum = 0
 	rcp.lastSpeedTime = 0
+}
+
+func (rcp *Rcpb) updateSendSum(sendSize int) {
+	timeNow := uint32(time.Now().UnixMilli())
+	rcp.sendByteSum += uint32(sendSize)
+	if rcp.lastSpeedTime > 0 {
+		rcp.SpeedTimeSum += timeNow - rcp.lastSpeedTime
+	}
+	rcp.lastSpeedTime = timeNow
 }
 func (rcp *Rcpb) Flush() {
 	if rcp.debugName != "Block 127.0.0.1:9666" {
@@ -238,14 +248,8 @@ func (rcp *Rcpb) Flush() {
 	seg.Una = rcp.rcvNext
 
 	flushBufferFun := func(buffer []byte) []byte {
-		timeNow := uint32(time.Now().UnixMilli())
 		if len(buffer)+IKCP_OVERHEAD > int(rcp.mtu) {
 			rcp.output(buffer)
-			rcp.sendByteSum += uint32(len(buffer))
-			if rcp.lastSpeedTime > 0 {
-				rcp.SpeedTimeSum += timeNow - rcp.lastSpeedTime
-			}
-			rcp.lastSpeedTime = timeNow
 			buffer = make([]byte, 0)
 
 		}
@@ -256,6 +260,7 @@ func (rcp *Rcpb) Flush() {
 		buffer = flushBufferFun(buffer)
 		seg.Sn = rcp.ackList[i].Sn
 		seg.Ts = rcp.ackList[i].Ts
+		RcpDebugPrintf(rcp.debugName, "Send ACK Packet, sn %v", seg.Sn)
 		buffer = append(buffer, seg.Encode()...)
 	}
 	rcp.ackList = nil
@@ -327,6 +332,7 @@ func (rcp *Rcpb) Flush() {
 			seg.Xmit = 1
 			seg.Rto = rcp.RxRto
 			seg.Resendts = current + seg.Rto
+			rcp.updateSendSum(len(seg.Data))
 		} else if current > seg.Resendts {
 			needSend = 1
 			seg.Xmit++
@@ -445,9 +451,11 @@ func (rcp *Rcpb) Input(data []byte) int {
 		data = ikcp_decode32u(data, &seg.Len)
 
 		if len(data) < int(seg.Len) {
+			RcpDebugPrintf(rcp.debugName, "Input Error -2")
 			return -2
 		}
 		if seg.Cmd != IKCP_CMD_ACK && seg.Cmd != IKCP_CMD_WINS && seg.Cmd != IKCP_CMD_WASK && seg.Cmd != IKCP_CMD_PUSH {
+			RcpDebugPrintf(rcp.debugName, "Input Error -3")
 			return -3
 		}
 		rcp.rmtWnd = seg.Wnd
@@ -455,7 +463,9 @@ func (rcp *Rcpb) Input(data []byte) int {
 		rcp.ShrinkBuf() // TODO: check it if can be put back
 
 		if seg.Cmd == IKCP_CMD_ACK {
-			RcpDebugPrintf(rcp.debugName, "Input get ACK packet, sn %v", seg.Sn)
+			if seg.Sn < rcp.sndUna {
+				continue
+			}
 			if rcp.current > seg.Ts {
 				rcp.updateRto(rcp.current - seg.Ts)
 			}
@@ -467,6 +477,7 @@ func (rcp *Rcpb) Input(data []byte) int {
 			}
 			rcp.sndBuf.ParseAck(seg.Sn)
 			rcp.ShrinkBuf()
+			RcpDebugPrintf(rcp.debugName, "Input get ACK packet, sn %v , SndUna %v", seg.Sn, rcp.sndUna)
 		} else if seg.Cmd == IKCP_CMD_PUSH {
 			if seg.Sn == 1 {
 				//println("hi")

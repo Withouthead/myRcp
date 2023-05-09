@@ -90,20 +90,21 @@ func getCurrentTime() uint32 {
 
 func (conn *RcpConn) input(data []byte) {
 	conn.mu.Lock()
-	defer conn.mu.Unlock()
 	conn.kcpb.Input(data)
+	conn.mu.Unlock()
+
 	//log.Print("data is ready to read by kcp Read function")
 	conn.readEventCh <- struct{}{}
 }
 
 func (conn *RcpConn) run() {
-	updateTime := 10 * time.Millisecond
+	updateTime := 1 * time.Millisecond
 	if !conn.isServer {
 		//print("hi") // TODO: delete it
 	}
 	for !conn.IsDead() {
 		conn.mu.Lock()
-		conn.kcpb.Update(getCurrentTime())
+		conn.kcpb.Flush()
 		conn.mu.Unlock()
 		select {
 		case data := <-conn.udpReadCh:
@@ -122,7 +123,7 @@ func (conn *RcpConn) Close() {
 	conn.kcpb.Flush()
 }
 
-func (conn *RcpConn) Write(data []byte) { // TODO: add ch to block function
+func (conn *RcpConn) Write(data []byte) {
 	for {
 		conn.mu.Lock()
 		if conn.kcpb.sndWind > uint16(conn.kcpb.sndNext)-uint16(conn.kcpb.sndUna) {
@@ -157,13 +158,12 @@ func (conn *RcpConn) ClearSendMask() {
 	conn.kcpb.SendMask = make(map[uint32]struct{})
 }
 
-func (conn *RcpConn) GetSendSpeedAndSendSum() (float64, uint32) {
+func (conn *RcpConn) GetSendSpeedAndSendSum() uint32 {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
-	bts := conn.kcpb.GetSendSpeedBts()
 	sum := conn.kcpb.sendByteSum
 	conn.kcpb.ClearUpSendSpeedTime()
-	return bts, sum
+	return sum
 }
 
 const (
@@ -177,6 +177,7 @@ func (conn *RcpConn) Read(buf []byte) (int, int) {
 	recvCount := 0
 	for !conn.IsDead() {
 		//log.Print("want to read something...")
+		//RcpDebugPrintf(conn.debugName, "want to read something")
 		conn.mu.Lock()
 		size := len(buf)
 		n := conn.kcpb.getNextRecvPacketSize()

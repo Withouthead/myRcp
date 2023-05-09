@@ -19,22 +19,22 @@ func (s *DownloadServer) accept() {
 }
 
 func (s *DownloadServer) startTask(c *Rcp.RcpConn) {
-	log.Println("get conn from client")
 	data := make([]byte, 0)
-	for !c.IsDead() {
+	rawTransportInfo := make([]byte, 1500)
+	size, _ := c.Read(rawTransportInfo)
+	transportInfo := decodeTransportStruct(rawTransportInfo[:size])
+	count := 0
+	for count < transportInfo.Size {
 		buf := make([]byte, 1500)
-		size, err := c.Read(buf)
+		size, _ := c.Read(buf)
 		if size != 0 {
 			data = append(data, buf[:size]...)
 		}
-		if err == Rcp.READERROR_SUCCESS {
-			break
-		}
+		count += size
 	}
-	transportData := decodeTransportStruct(data)
-	//filepath.Join()
-	savePath := filepath.Join(s.downloadPath, transportData.FileName)
-	err := os.WriteFile(savePath, transportData.Data, 0644)
+	savePath := filepath.Join(s.downloadPath, transportInfo.FileName)
+	log.Println("read done")
+	err := os.WriteFile(savePath, data, 0644)
 	if err != nil {
 		log.Fatalln(err)
 	}
