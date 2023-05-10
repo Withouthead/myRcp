@@ -10,8 +10,8 @@ const (
 	IKCP_SEND_WASK_FLAG = 2
 	IKCP_THRESH_MIN     = 2
 	IKCP_RTO_MAX        = 60000
-	IKCP_WND_SND        = 128
-	IKCP_WND_RCV        = 128
+	IKCP_WND_SND        = 80
+	IKCP_WND_RCV        = 120
 	IKCP_MTE_DEF        = 1400
 	IKCP_RTO_DEF        = 200
 	IKCP_RTO_MIN        = 100
@@ -140,7 +140,7 @@ func (rcp *Rcpb) Send(buffer []byte) int {
 	} else {
 		count = (size + int(rcp.mss) - 1) / int(rcp.mss)
 	}
-	if count >= int(rcp.rcvWind) {
+	if count >= int(rcp.sndWind) {
 		return -2
 	}
 	if count == 0 {
@@ -232,14 +232,14 @@ func (rcp *Rcpb) updateSendSum(sendSize int) {
 }
 func (rcp *Rcpb) Flush() {
 	if rcp.debugName != "Block 127.0.0.1:9666" {
-		println("hi")
+		//println("hi")
 	}
 
 	// FIXME: Just For Test
 	//lost := false
 	change := 0
 
-	current := rcp.current
+	current := uint32(time.Now().UnixMilli())
 	buffer := make([]byte, 0)
 	var seg RcpSeg
 	seg.Conv = rcp.conv
@@ -428,6 +428,9 @@ func (rcp *Rcpb) updateRcvQueue() {
 }
 
 func (rcp *Rcpb) Input(data []byte) int {
+	if rcp.debugName != "Block 127.0.0.1:9666" {
+		//println("hi")
+	}
 	prevUna := rcp.sndUna
 	var maxAck uint32
 	//var lastestTs uint32
@@ -465,6 +468,9 @@ func (rcp *Rcpb) Input(data []byte) int {
 		if seg.Cmd == IKCP_CMD_ACK {
 			if seg.Sn < rcp.sndUna {
 				continue
+			}
+			if seg.Sn > rcp.sndUna {
+				//println("hi")
 			}
 			if rcp.current > seg.Ts {
 				rcp.updateRto(rcp.current - seg.Ts)

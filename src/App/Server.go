@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 type DownloadServer struct {
@@ -24,20 +25,39 @@ func (s *DownloadServer) startTask(c *Rcp.RcpConn) {
 	size, _ := c.Read(rawTransportInfo)
 	transportInfo := decodeTransportStruct(rawTransportInfo[:size])
 	count := 0
+	savePath := filepath.Join(s.downloadPath, transportInfo.FileName)
+
+	var f *os.File
+	if checkFileIsExist(savePath) {
+		f, _ = os.Create(savePath)
+	} else {
+		f, _ = os.OpenFile(savePath, os.O_APPEND, 0666)
+	}
+
 	for count < transportInfo.Size {
 		buf := make([]byte, 1500)
 		size, _ := c.Read(buf)
 		if size != 0 {
 			data = append(data, buf[:size]...)
+			if len(data) > 1024*1024*5 {
+				f.Write(data)
+				data = make([]byte, 0)
+			}
 		}
 		count += size
 	}
-	savePath := filepath.Join(s.downloadPath, transportInfo.FileName)
 	log.Println("read done")
-	err := os.WriteFile(savePath, data, 0644)
-	if err != nil {
-		log.Fatalln(err)
+	if len(data) > 0 {
+		f.Write(data)
 	}
+	time.Sleep(5 * time.Second)
+}
+
+func checkFileIsExist(filename string) bool {
+	if _, err := os.Stat(filename); os.IsNotExist(err) {
+		return false
+	}
+	return true
 }
 
 func (s *DownloadServer) Start(addr string, downloadPath string) {

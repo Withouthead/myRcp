@@ -90,11 +90,16 @@ func getCurrentTime() uint32 {
 
 func (conn *RcpConn) input(data []byte) {
 	conn.mu.Lock()
+	prevNext := conn.kcpb.rcvNext
 	conn.kcpb.Input(data)
+	lastNext := conn.kcpb.rcvNext
 	conn.mu.Unlock()
 
 	//log.Print("data is ready to read by kcp Read function")
-	conn.readEventCh <- struct{}{}
+	if prevNext < lastNext {
+		conn.readEventCh <- struct{}{}
+	}
+
 }
 
 func (conn *RcpConn) run() {
@@ -140,7 +145,7 @@ func (conn *RcpConn) Write(data []byte) {
 		select {
 		case <-conn.die:
 			return
-		case <-time.After(10 * time.Millisecond):
+		case <-time.After(1 * time.Millisecond):
 			continue
 		}
 	}

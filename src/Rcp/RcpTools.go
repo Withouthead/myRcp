@@ -6,7 +6,7 @@ import (
 	"log"
 )
 
-const DebugMode = true
+const DebugMode = false
 
 func RcpDebugPrintf(addr string, format string, v ...interface{}) {
 	log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)

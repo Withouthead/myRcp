@@ -41,21 +41,25 @@ func (c *UploadDataClient) printSendInfo(conn *Rcp.RcpConn, fileName string, byt
 
 func (c *UploadDataClient) SendFile(filePath string) {
 	fileName := filepath.Base(filePath)
-	b, _ := os.ReadFile(filePath)
-	transportInfoData := encodeTransportStruct(TransportInfo{fileName, len(b)})
+	f, _ := os.Open(filePath)
+	defer f.Close()
+	fileStat, _ := f.Stat()
+	fileSize := fileStat.Size()
+	transportInfoData := encodeTransportStruct(TransportInfo{fileName, int(fileSize)})
 	conn := Rcp.DialRcp(c.remoteAddr)
-	go c.printSendInfo(conn, fileName, int64(len(b)))
+	go c.printSendInfo(conn, fileName, fileSize)
 	conn.Write(transportInfoData)
-	size := len(b)
-	for size > 0 {
-		if size < c.sliceSize {
-			conn.Write(b)
-		} else {
-			conn.Write(b[:c.sliceSize])
-			b = b[c.sliceSize:]
+	readBuf := make([]byte, 5*1024)
+	count := 0
+	for {
+		n, _ := f.Read(readBuf)
+		if n == 0 {
+			break
 		}
-		size = len(b)
+		count += n
+		conn.Write(readBuf[:n])
 	}
-	conn.Write(b)
+	log.Println("send Finish count %v, file size %v", count, fileSize)
+	time.Sleep(5 * time.Second)
 	conn.Close()
 }
