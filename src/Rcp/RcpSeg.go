@@ -44,17 +44,17 @@ type SegQueueNode struct {
 }
 
 type SegQueue struct {
-	head        *SegQueueNode
-	tail        *SegQueueNode
-	len         int
-	snToNodeMap map[uint32]*SegQueueNode
+	head *SegQueueNode
+	tail *SegQueueNode
+	len  int
+	//snToNodeMap map[uint32]*SegQueueNode
 }
 
 func NewSegQueue() *SegQueue {
 	q := &SegQueue{}
 	q.head = &SegQueueNode{}
 	q.tail = q.head
-	q.snToNodeMap = make(map[uint32]*SegQueueNode)
+	//q.snToNodeMap = make(map[uint32]*SegQueueNode)
 	q.len = 0
 	return q
 }
@@ -67,23 +67,13 @@ func (q *SegQueue) Back() *SegQueueNode {
 }
 
 func (q *SegQueue) Push(seg *RcpSeg) {
-	if _, ok := q.snToNodeMap[seg.Sn]; ok {
-		return
-	}
-
-	newNode := &SegQueueNode{Seg: seg}
-	newNode.Prev = q.tail
-	q.tail.Next = newNode
-	q.tail = newNode
-	q.snToNodeMap[seg.Sn] = newNode
-	q.len++
+	q.PushSegment(seg)
 }
 
 func (q *SegQueue) PopFront() {
 	if q.len == 0 {
 		return
 	}
-	delete(q.snToNodeMap, q.head.Next.Seg.Una)
 	q.head.Next = q.head.Next.Next
 	if q.head.Next != nil {
 		q.head.Next.Prev = q.head
@@ -100,7 +90,6 @@ func (q *SegQueue) PopBack() {
 	if q.len == 0 {
 		return
 	}
-	delete(q.snToNodeMap, q.tail.Seg.Una)
 	q.tail = q.tail.Prev
 	q.tail.Next = nil
 	q.len--
@@ -110,11 +99,8 @@ func (q *SegQueue) PopBack() {
 	}
 }
 
-func (q *SegQueue) deleteSeg(sn uint32) {
-	node, ok := q.snToNodeMap[sn]
-	if !ok {
-		return
-	}
+func (q *SegQueue) deleteSeg(node *SegQueueNode) {
+
 	if node == q.tail {
 		q.tail = node.Prev
 	}
@@ -122,7 +108,6 @@ func (q *SegQueue) deleteSeg(sn uint32) {
 	if node.Next != nil {
 		node.Next.Prev = node.Prev
 	}
-	delete(q.snToNodeMap, sn)
 	q.len--
 	if q.len == 0 {
 		q.tail = q.head
@@ -130,12 +115,20 @@ func (q *SegQueue) deleteSeg(sn uint32) {
 	}
 }
 
-func (q *SegQueue) Size() int {
-	return q.len
+func (q *SegQueue) ParseAck(sn uint32) {
+	for p := q.Front(); p != nil; p = p.Next {
+		if p.Seg.Sn > sn {
+			return
+		}
+		if p.Seg.Sn == sn {
+			q.deleteSeg(p)
+			return
+		}
+	}
 }
 
-func (q *SegQueue) ParseAck(sn uint32) {
-	q.deleteSeg(sn)
+func (q *SegQueue) Size() int {
+	return q.len
 }
 
 func (q *SegQueue) ParseUna(sn uint32) {
@@ -145,8 +138,8 @@ func (q *SegQueue) ParseUna(sn uint32) {
 	p := q.head.Next
 	for p != nil {
 		nextNode := p.Next
-		if p.Seg.Una <= sn {
-			q.deleteSeg(p.Seg.Una)
+		if p.Seg.Sn < sn {
+			q.deleteSeg(p)
 		} else {
 			break
 		}
@@ -170,13 +163,8 @@ func (q *SegQueue) ParseFastAck(sn uint32) {
 }
 
 func (q *SegQueue) PushSegment(seg *RcpSeg) {
-	_, ok := q.snToNodeMap[seg.Sn]
-	if ok {
-		return
-	}
 	segNode := &SegQueueNode{Seg: seg}
 	if q.Size() == 0 {
-
 		q.head.Next = segNode
 		segNode.Prev = q.head
 		q.tail = segNode
@@ -184,6 +172,9 @@ func (q *SegQueue) PushSegment(seg *RcpSeg) {
 		p := q.head
 		for p.Next != nil && p.Next.Seg.Sn < seg.Sn {
 			p = p.Next
+		}
+		if p.Next != nil && p.Next.Seg.Sn == seg.Sn {
+			return
 		}
 		segNode.Next = p.Next
 		if p.Next != nil {
@@ -195,6 +186,5 @@ func (q *SegQueue) PushSegment(seg *RcpSeg) {
 		p.Next = segNode
 	}
 	q.len++
-	q.snToNodeMap[seg.Sn] = segNode
 	//q.Push(seg)
 }

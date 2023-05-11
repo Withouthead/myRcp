@@ -11,7 +11,7 @@ const (
 	IKCP_THRESH_MIN     = 2
 	IKCP_RTO_MAX        = 60000
 	IKCP_WND_SND        = 80
-	IKCP_WND_RCV        = 120
+	IKCP_WND_RCV        = 100
 	IKCP_MTE_DEF        = 1400
 	IKCP_RTO_DEF        = 200
 	IKCP_RTO_MIN        = 100
