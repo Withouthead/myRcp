@@ -32,9 +32,10 @@ func (conn *RcpConn) IsDead() bool {
 	return flag > 0
 }
 
-func (conn *RcpConn) kcpOutPut(buf []byte) {
+func (conn *RcpConn) kcpOutPut(buf []byte, size int) {
 	//conn.udpConn.WriteTo(buf, conn.remoteAddr)
-	_, err := conn.udpConn.WriteTo(buf, conn.remoteAddr)
+	RcpDebugPrintf(conn.debugName, "Send packet size %v", size)
+	_, err := conn.udpConn.WriteTo(buf[:size], conn.remoteAddr)
 	if err != nil {
 		log.Fatalf("send Error %v", err)
 	} else {
@@ -68,7 +69,7 @@ func NewKcpConn(conv uint32, udpConn net.PacketConn, remoteAddr net.Addr, isServ
 }
 
 func (conn *RcpConn) readUdpData() {
-	buffer := make([]byte, 1500)
+	buffer := make([]byte, 5000)
 	for {
 		if conn.isServer {
 			data := <-conn.readUdpPacketCh
@@ -253,8 +254,8 @@ type packet struct {
 func (l *Listener) run() {
 	chPacket := make(chan packet, 8192)
 	go func() {
+		data := make([]byte, 5000)
 		for {
-			data := make([]byte, 1500)
 			n, addr, err := l.udpConn.ReadFrom(data)
 			if err != nil {
 				log.Fatalf("receive udp data error %v", err)
