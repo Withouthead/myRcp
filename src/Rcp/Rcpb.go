@@ -10,8 +10,8 @@ const (
 	IKCP_SEND_WASK_FLAG = 2
 	IKCP_THRESH_MIN     = 2
 	IKCP_RTO_MAX        = 60000
-	IKCP_WND_SND        = 80
-	IKCP_WND_RCV        = 100
+	IKCP_WND_SND        = 100
+	IKCP_WND_RCV        = 200
 	IKCP_MTE_DEF        = 1400
 	IKCP_RTO_DEF        = 200
 	IKCP_RTO_MIN        = 100
@@ -70,6 +70,7 @@ type Rcpb struct {
 	sshthresh         uint32
 	incr              uint16
 	outPutFun         func(data []byte)
+	buffer            RcpSendBuffer
 	debugName         string // For Debug
 
 	//For Test
@@ -103,6 +104,7 @@ func NewKcpB(conv uint32, localAddr string) *Rcpb {
 	rcpb.debugName = "Block " + localAddr
 	rcpb.SendMask = make(map[uint32]struct{})
 	rcpb.cwnd = 1
+	rcpb.buffer.Init(5000, int(rcpb.mtu-100))
 	return rcpb
 }
 
@@ -240,29 +242,20 @@ func (rcp *Rcpb) Flush() {
 	change := 0
 
 	current := uint32(time.Now().UnixMilli())
-	buffer := make([]byte, 0)
 	var seg RcpSeg
 	seg.Conv = rcp.conv
 	seg.Cmd = IKCP_CMD_ACK
 	seg.Wnd = rcp.getUnusedWindSize()
 	seg.Una = rcp.rcvNext
 
-	flushBufferFun := func(buffer []byte) []byte {
-		if len(buffer)+IKCP_OVERHEAD > int(rcp.mtu) {
-			rcp.output(buffer)
-			buffer = make([]byte, 0)
-
-		}
-		return buffer
-	}
-
 	for i := 0; i < len(rcp.ackList); i++ {
-		buffer = flushBufferFun(buffer)
+
 		seg.Sn = rcp.ackList[i].Sn
 		seg.Ts = rcp.ackList[i].Ts
 		RcpDebugPrintf(rcp.debugName, "Send ACK Packet, sn %v", seg.Sn)
-		buffer = append(buffer, seg.Encode()...)
+		rcp.buffer.SendData(seg.Encode())
 	}
+
 	rcp.ackList = nil
 
 	if rcp.rmtWnd == 0 {
@@ -287,15 +280,13 @@ func (rcp *Rcpb) Flush() {
 	if rcp.sendBitFlag&IKCP_SEND_WASK_FLAG > 0 {
 		seg.Cmd = IKCP_CMD_WASK
 		RcpDebugPrintf(rcp.debugName, "Send Ask Windows Size packet")
-		buffer = flushBufferFun(buffer)
-		buffer = append(buffer, seg.Encode()...)
+		rcp.buffer.SendData(seg.Encode())
 	}
 
 	if rcp.sendBitFlag&IKCP_SEND_WIND_FLAG > 0 {
 		seg.Cmd = IKCP_CMD_WINS
 		RcpDebugPrintf(rcp.debugName, "Send Tell Windows Size packet, size %v", seg.Wnd)
-		buffer = flushBufferFun(buffer)
-		buffer = append(buffer, seg.Encode()...)
+		rcp.buffer.SendData(seg.Encode())
 	}
 
 	rcp.sendBitFlag = 0
@@ -362,15 +353,17 @@ func (rcp *Rcpb) Flush() {
 		}
 
 		if needSend > 0 {
-			RcpDebugPrintf(rcp.debugName, "Send Push Packet, sn %v", seg.Sn)
+			RcpDebugPrintf(rcp.debugName, "Send Push Packet, sn %v, data len %v", seg.Sn, len(seg.Data))
 			seg.Ts = current
 			seg.Wnd = rcp.getUnusedWindSize()
 			seg.Una = rcp.rcvNext
 			seg.Len = uint32(len(seg.Data))
-			buffer = flushBufferFun(buffer)
-			buffer = append(buffer, seg.Encode()...)
 			if seg.Len > 0 {
-				buffer = append(buffer, seg.Data...)
+				sendData := seg.Encode()
+				sendData = append(sendData, seg.Data...)
+				rcp.buffer.SendData(sendData)
+			} else {
+				rcp.buffer.SendData(seg.Encode())
 			}
 			if seg.Xmit >= rcp.deadLinkXmitLimit {
 				rcp.state = -1
@@ -378,10 +371,7 @@ func (rcp *Rcpb) Flush() {
 		}
 
 	}
-	if len(buffer) > 0 {
-		rcp.output(buffer)
-		buffer = nil
-	}
+	rcp.buffer.Flush()
 
 	if change > 0 { // 快速重传
 		inflight := rcp.sndNext - rcp.sndUna
@@ -429,20 +419,28 @@ func (rcp *Rcpb) updateRcvQueue() {
 
 func (rcp *Rcpb) Input(data []byte) int {
 	if rcp.debugName != "Block 127.0.0.1:9666" {
-		//println("hi")
+		RcpDebugPrintf(rcp.debugName, "Input Get Pakcet Data %v", len(data))
 	}
 	prevUna := rcp.sndUna
+	//pervDat := data
+	////println(len(pervDat))
 	var maxAck uint32
 	//var lastestTs uint32
 	flag := 0
+	cnt := 0
 	for {
+
 		if len(data) < IKCP_OVERHEAD {
+			if cnt == 0 {
+				RcpDebugPrintf(rcp.debugName, "Input Error -1, Data len %v", len(data))
+			}
 			break
 		}
 
 		var seg RcpSeg
 		data = ikcp_decode32u(data, &seg.Conv)
 		if seg.Conv != rcp.conv {
+			RcpDebugPrintf(rcp.debugName, "Input Error -4, Conv %v, want Conv %v", seg.Conv, rcp.conv)
 			return -1
 		}
 		data = ikcp_decode8u(data, &seg.Cmd)
@@ -452,9 +450,8 @@ func (rcp *Rcpb) Input(data []byte) int {
 		data = ikcp_decode32u(data, &seg.Sn)
 		data = ikcp_decode32u(data, &seg.Una)
 		data = ikcp_decode32u(data, &seg.Len)
-
 		if len(data) < int(seg.Len) {
-			RcpDebugPrintf(rcp.debugName, "Input Error -2")
+			RcpDebugPrintf(rcp.debugName, "Input Error -2, Sn %v, expect len %v, real len %v", seg.Sn, seg.Len, len(data))
 			return -2
 		}
 		if seg.Cmd != IKCP_CMD_ACK && seg.Cmd != IKCP_CMD_WINS && seg.Cmd != IKCP_CMD_WASK && seg.Cmd != IKCP_CMD_PUSH {
@@ -464,14 +461,14 @@ func (rcp *Rcpb) Input(data []byte) int {
 		rcp.rmtWnd = seg.Wnd
 		rcp.sndBuf.ParseUna(seg.Una)
 		rcp.ShrinkBuf() // TODO: check it if can be put back
-
+		RcpDebugPrintf(rcp.debugName, "Input get Seg %v", seg.Sn)
 		if seg.Cmd == IKCP_CMD_ACK {
-			if seg.Sn < rcp.sndUna {
-				continue
-			}
-			if seg.Sn > rcp.sndUna {
-				//println("hi")
-			}
+			//if seg.Sn < rcp.sndUna {
+			//	continue
+			//}
+			//if seg.Sn > rcp.sndUna {
+			//	//println("hi")
+			//}
 			if rcp.current > seg.Ts {
 				rcp.updateRto(rcp.current - seg.Ts)
 			}
@@ -491,8 +488,9 @@ func (rcp *Rcpb) Input(data []byte) int {
 
 			if rcp.rcvNext+uint32(rcp.rcvWind) > seg.Sn {
 				rcp.ackList = append(rcp.ackList, AckNode{seg.Sn, seg.Ts})
-				seg.Data = make([]byte, seg.Len)
-				copy(seg.Data, data)
+				//seg.Data = make([]byte, seg.Len)
+				//copy(seg.Data, data)
+				seg.Data = data[:seg.Len]
 				rcp.rcvBuf.PushSegment(&seg)
 				rcp.updateRcvQueue()
 				RcpDebugPrintf(rcp.debugName, "Input get Push packet, sn %v, windows size %v", seg.Sn, rcp.getUnusedWindSize())
@@ -507,9 +505,8 @@ func (rcp *Rcpb) Input(data []byte) int {
 			return -3
 		}
 		data = data[seg.Len:]
-
+		cnt += 1
 	}
-
 	if flag != 0 {
 		rcp.sndBuf.ParseFastAck(maxAck)
 	}
@@ -538,8 +535,8 @@ func (rcp *Rcpb) Input(data []byte) int {
 	return 0
 }
 
-func (rcp *Rcpb) SetOutPut(outPutFun func(data []byte)) {
-	rcp.outPutFun = outPutFun
+func (rcp *Rcpb) SetOutPut(outPutFun func(data []byte, size int)) {
+	rcp.buffer.outputFun = outPutFun
 }
 
 func (rcp *Rcpb) updateRto(rtt uint32) {

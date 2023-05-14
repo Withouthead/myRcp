@@ -49,7 +49,7 @@ func (c *UploadDataClient) SendFile(filePath string) {
 	conn := Rcp.DialRcp(c.remoteAddr)
 	go c.printSendInfo(conn, fileName, fileSize)
 	conn.Write(transportInfoData)
-	readBuf := make([]byte, 5*1024)
+	readBuf := make([]byte, 5*1024*10)
 	count := 0
 	for {
 		n, _ := f.Read(readBuf)

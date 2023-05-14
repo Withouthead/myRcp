@@ -16,6 +16,9 @@ func StartServer() {
 }
 
 func main() {
+	//file, _ := os.OpenFile("sys.log", os.O_CREATE|os.O_WRONLY|os.O_CREATE, 0666)
+	//defer file.Close()
+	//log.SetOutput(file)
 	go func() {
 		log.Println(http.ListenAndServe(":6060", nil))
 	}()

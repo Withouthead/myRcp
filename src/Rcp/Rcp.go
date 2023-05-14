@@ -60,7 +60,7 @@ func NewKcpConn(conv uint32, udpConn net.PacketConn, remoteAddr net.Addr, isServ
 	kcpConn.isServer = isServer
 	kcpConn.debugName = "Connection " + udpConn.LocalAddr().String()
 	if isServer {
-		kcpConn.readUdpPacketCh = make(chan []byte, 1024) // TODO: make sure the chan size is ok
+		kcpConn.readUdpPacketCh = make(chan []byte, 5000) // TODO: make sure the chan size is ok
 	}
 	kcpConn.remoteAddr = remoteAddr
 	go kcpConn.run()
@@ -79,7 +79,9 @@ func (conn *RcpConn) readUdpData() {
 			if err != nil {
 				log.Fatalf("read udp error %v", err)
 			}
-			conn.udpReadCh <- buffer[:n]
+			sendBuf := make([]byte, n)
+			copy(sendBuf, buffer)
+			conn.udpReadCh <- sendBuf
 		}
 
 	}
@@ -263,7 +265,11 @@ func (l *Listener) run() {
 			if n < IKCP_OVERHEAD {
 				continue
 			}
-			chPacket <- packet{addr, data[:n]}
+			p := packet{}
+			p.Addr = addr
+			p.data = make([]byte, n)
+			copy(p.data, data)
+			chPacket <- p
 		}
 	}()
 
