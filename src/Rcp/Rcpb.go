@@ -10,8 +10,8 @@ const (
 	IKCP_SEND_WASK_FLAG = 2
 	IKCP_THRESH_MIN     = 2
 	IKCP_RTO_MAX        = 60000
-	IKCP_WND_SND        = 100
-	IKCP_WND_RCV        = 200
+	IKCP_WND_SND        = 700
+	IKCP_WND_RCV        = 700
 	IKCP_MTE_DEF        = 1400
 	IKCP_RTO_DEF        = 200
 	IKCP_RTO_MIN        = 100

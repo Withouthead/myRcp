@@ -2,7 +2,6 @@ package App
 
 import (
 	"Rcp/src/Rcp"
-	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -46,7 +45,7 @@ func (s *DownloadServer) startTask(c *Rcp.RcpConn) {
 		}
 		count += size
 	}
-	log.Println("read done")
+	//log.Println("read done")
 	if len(data) > 0 {
 		f.Write(data)
 	}
